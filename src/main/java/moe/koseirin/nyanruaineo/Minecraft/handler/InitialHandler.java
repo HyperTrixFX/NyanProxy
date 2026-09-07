@@ -287,7 +287,7 @@ public class InitialHandler extends ChannelInboundHandlerAdapter {
         if (ban != null) {
             log.info("{} ({}) blocked by game ban {} ({})", username, authenticatedUuid,
                     ban.getBanID(), ban.getReason());
-            channel.writeAndFlush(new Kick(proxy.getProxyBanService().buildBanKickJson(ban)))
+            channel.writeAndFlush(new Kick(proxy.getProxyBanService().buildBanKickJson(ban, username)))
                     .addListener(ChannelFutureListener.CLOSE);
             return;
         }

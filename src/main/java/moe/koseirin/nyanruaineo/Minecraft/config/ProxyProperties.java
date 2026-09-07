@@ -8,6 +8,7 @@ package moe.koseirin.nyanruaineo.Minecraft.config;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import lombok.extern.slf4j.Slf4j;
+import moe.koseirin.nyanruaineo.Minecraft.config.cfg.BanMessageConfig;
 import moe.koseirin.nyanruaineo.Minecraft.config.cfg.FirewallConfig;
 import moe.koseirin.nyanruaineo.Minecraft.config.cfg.KickMessageConfig;
 import moe.koseirin.nyanruaineo.Minecraft.config.cfg.MotdConfig;
@@ -31,6 +32,7 @@ public class ProxyProperties {
     private static final String KEY_TABLIST = "proxy.tablist";
     private static final String KEY_FIREWALL = "proxy.firewall";
     private static final String KEY_KICK_MESSAGE = "proxy.kick-message";
+    private static final String KEY_BAN_MESSAGE = "proxy.ban-message";
     private static final String KEY_MAX_PLAYERS = "proxy.maxPlayers";
     private static final String KEY_ONLINE_MODE = "proxy.online-mode";
     private static final String KEY_IP_FORWARD = "proxy.ip-forward";
@@ -38,6 +40,9 @@ public class ProxyProperties {
     private static final String KEY_FORGE_SUPPORT = "proxy.forge-support";
 
     private final SystemConfigCacheService cacheService;
+
+    /** 旧格式踢出模板 → 独立封禁模板的一次性迁移标记。 */
+    private volatile boolean migrationChecked = false;
 
     public ProxyProperties(SystemConfigCacheService cacheService) {
         this.cacheService = cacheService;
@@ -312,53 +317,152 @@ public class ProxyProperties {
     }
 
     /**
-     * 从 {@code proxy.kick-message} 读取踢出消息配置：
+     * 从 {@code proxy.kick-message} 读取普通踢出屏幕模板（与封禁模板 {@code proxy.ban-message} 分离）。
      *
      * <pre>
      * {
-     * "enabled": true,
-     * "banned_message_base": "&5&l緒山まひろ ...n&b&l»&f&l玩家: &4$playerName."
+     *   "enabled": true,
+     *   "kick_message_base": "&cYou have been kicked!\n&7Reason: &f$reason\n&7Kick ID: &f$kickId"
      * }
      * </pre>
      *
-     * 模板支持 {@code &} 颜色代码、{@code n}（或 {@code |}）换行，以及 {@code $playerName} / {@code $reason} / {@code $idRandom} 占位符。
-     * 运行时修改配置后刷新缓存服务即可热重载；如果缺少某个键，则将默认值写回缓存。
+     * 模板支持 {@code &} 颜色代码、{@code n}（或 {@code |}）换行，占位符
+     * {@code $playerName} / {@code $reason} / {@code $kickId}。
+     * 旧版本把封禁模板也放在这个键下（字段名 {@code banned_message_base}），首次读取时会自动迁移到
+     * {@code proxy.ban-message} 并回写新的踢出默认模板。
      */
     public KickMessageConfig getKickMessageConfig() {
-        String val = cacheService.getConfig(KEY_KICK_MESSAGE);
-
-        if (val == null || val.isBlank()) {
-            KickMessageConfig defaultConfig = new KickMessageConfig();
-            defaultConfig.setEnabled(true);
-            defaultConfig.setBannedMessageBase(
-                    "&5&l緒山まひろ &b&l» &5&l呐呐~杂鱼哥哥不会这样就被&4&lBAN&5&l的不会说话了吧♡真是弱哎&5&l♡~ &f\n"
-                            + "&b&l»&f&lPlayer: &4$playerName\n"
-                            + "&b&l»&f&lReason: &c&l$reason&f&3&l\n"
-                            + "&b&l»&f&lBanID : &c&l$idRandom\n"
-                            + "&5&lFind out more:&b&l»&f&l http://www.nyacat.cloud &9");
-            try {
-                cacheService.updateConfig(KEY_KICK_MESSAGE, JSON.toJSONString(defaultConfig));
-            } catch (Exception e) {
-                try {
-                    cacheService.addConfig(KEY_KICK_MESSAGE, JSON.toJSONString(defaultConfig));
-                } catch (Exception ignored) {
-                    // Already present or no transaction — the default is returned regardless.
-                }
-            }
-            return defaultConfig;
+        ensureConfigsMigrated();
+        KickMessageConfig config = parseConfig(KEY_KICK_MESSAGE, KickMessageConfig.class);
+        if (config == null) {
+            config = defaultKickConfig();
+            writeConfig(KEY_KICK_MESSAGE, config);
         }
+        return config;
+    }
 
+    /**
+     * 从 {@code proxy.ban-message} 读取封禁屏幕模板。
+     *
+     * <pre>
+     * {
+     *   "enabled": true,
+     *   "banned_message_base": "&5&l... \n&b&l»&f&lPlayer: &4$playerName\n...$banId...$expireTime..."
+     * }
+     * </pre>
+     *
+     * 占位符 {@code $playerName} / {@code $reason} / {@code $banId} / {@code $expireTime}
+     * （永久封禁时 {@code $expireTime} 显示「永久」）。
+     */
+    public BanMessageConfig getBanMessageConfig() {
+        ensureConfigsMigrated();
+        BanMessageConfig config = parseConfig(KEY_BAN_MESSAGE, BanMessageConfig.class);
+        if (config == null) {
+            config = defaultBanConfig();
+            writeConfig(KEY_BAN_MESSAGE, config);
+        }
+        return config;
+    }
+
+    private KickMessageConfig defaultKickConfig() {
+        KickMessageConfig config = new KickMessageConfig();
+        config.setEnabled(true);
+        config.setKickMessageBase(
+                "&c&lYou have been kicked from the proxy!\n"
+                        + "&7Reason: &f$reason\n"
+                        + "&7Kick ID: &f$kickId");
+        return config;
+    }
+
+    private BanMessageConfig defaultBanConfig() {
+        BanMessageConfig config = new BanMessageConfig();
+        config.setEnabled(true);
+        config.setBannedMessageBase(
+                "&5&l緒山まひろ &b&l» &5&l呐呐~杂鱼哥哥不会这样就被&4&lBAN&5&l的不会说话了吧♡真是弱哎&5&l♡~ &f\n"
+                        + "&b&l»&f&lPlayer: &4$playerName\n"
+                        + "&b&l»&f&lReason: &c&l$reason&f&3&l\n"
+                        + "&b&l»&f&lBanID : &c&l$banId\n"
+                        + "&b&l»&f&lExpireTime : &c&l$expireTime\n"
+                        + "&5&lFind out more:&b&l»&f&l http://www.nyacat.cloud &9");
+        return config;
+    }
+
+    /** 读取并解析某个配置键；缺失/空白/解析失败返回 null。 */
+    private <T> T parseConfig(String key, Class<T> clazz) {
+        String val = cacheService.getConfig(key);
+        if (val == null || val.isBlank()) {
+            return null;
+        }
         try {
-            KickMessageConfig config = JSON.parseObject(val.trim(), KickMessageConfig.class);
+            T config = JSON.parseObject(val.trim(), clazz);
             if (config == null) {
-                log.error("Parsed {} to null; using the fallback kick message (value: {})", KEY_KICK_MESSAGE, val);
-                return new KickMessageConfig();
+                log.error("Parsed {} to null (value: {})", key, val);
             }
             return config;
         } catch (Exception e) {
-            log.error("Failed to parse {} (value: {}): {}", KEY_KICK_MESSAGE, val, e.getMessage());
-            return new KickMessageConfig();
+            log.error("Failed to parse {} (value: {}): {}", key, val, e.getMessage());
+            return null;
         }
+    }
+
+    /** 把配置对象序列化后写回缓存（键不存在则新建）。 */
+    private void writeConfig(String key, Object config) {
+        String json = JSON.toJSONString(config);
+        try {
+            cacheService.updateConfig(key, json);
+        } catch (Exception e) {
+            try {
+                cacheService.addConfig(key, json);
+            } catch (Exception ignored) {
+                // Already present or no transaction — the default is returned regardless.
+            }
+        }
+    }
+
+    /**
+     * 一次性迁移：旧版本把封禁模板（字段 {@code banned_message_base}）放在 {@code proxy.kick-message} 下，
+     * 现在拆分为独立的 {@code proxy.ban-message}。迁移后把 {@code proxy.kick-message} 重置为踢出默认模板。
+     */
+    private void ensureConfigsMigrated() {
+        if (migrationChecked) {
+            return;
+        }
+        synchronized (this) {
+            if (migrationChecked) {
+                return;
+            }
+            String kickVal = cacheService.getConfig(KEY_KICK_MESSAGE);
+            if (kickVal != null && !kickVal.isBlank()) {
+                try {
+                    KickMessageConfig parsed = JSON.parseObject(kickVal.trim(), KickMessageConfig.class);
+                    if (parsed != null && (parsed.getKickMessageBase() == null || parsed.getKickMessageBase().isBlank())) {
+                        JSONObject raw = JSON.parseObject(kickVal.trim());
+                        String oldBanTemplate = raw == null ? null : raw.getString("banned_message_base");
+                        if (oldBanTemplate != null && !oldBanTemplate.isBlank()
+                                && cacheService.getConfig(KEY_BAN_MESSAGE) == null) {
+                            BanMessageConfig ban = new BanMessageConfig();
+                            ban.setEnabled(raw.getBooleanValue("enabled", true));
+                            ban.setBannedMessageBase(normalizeBanPlaceholders(oldBanTemplate));
+                            writeConfig(KEY_BAN_MESSAGE, ban);
+                            log.info("Migrated legacy ban template from {} to {}", KEY_KICK_MESSAGE, KEY_BAN_MESSAGE);
+                        }
+                        writeConfig(KEY_KICK_MESSAGE, defaultKickConfig());
+                    }
+                } catch (Exception e) {
+                    log.warn("Legacy kick-message migration skipped: {}", e.getMessage());
+                }
+            }
+            migrationChecked = true;
+        }
+    }
+
+    /** 旧封禁模板占位符统一为新约定。 */
+    private String normalizeBanPlaceholders(String template) {
+        return template
+                .replace("$idRandom", "$banId")
+                .replace("$playerUID", "$playerName")
+                .replace("$ExpireTime", "$expireTime")
+                .replace("UUID:", "Player:");
     }
 
     public boolean isOnlineMode() {

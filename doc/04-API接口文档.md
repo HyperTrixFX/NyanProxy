@@ -229,7 +229,8 @@ Event: <操作类型>
 | `proxy.motd` | json | 可解析为 `MotdConfig` |
 | `proxy.tablist` | json | 可解析为 `TabListConfig` |
 | `proxy.firewall` | json | 可解析为 `FirewallConfig` |
-| `proxy.kick-message` | json | 可解析为 `KickMessageConfig` |
+| `proxy.kick-message` | json | 可解析为 `KickMessageConfig`（普通踢出模板） |
+| `proxy.ban-message` | json | 可解析为 `BanMessageConfig`（封禁屏幕模板） |
 
 所有值长度 ≤ 800（`SystemConfig.configValue` 为 `varchar(800)`）。
 

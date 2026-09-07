@@ -41,7 +41,6 @@ public abstract class ProxyCommand {
     }
 
     /** 这个发送者是否可以运行命令（在权限系统之前不进行权限检查）。 */
-    //TODO 同，权限检查
     public boolean hasPermission(CommandSender sender) {
         return permission == null || permission.isEmpty() || sender.hasPermission(permission);
     }

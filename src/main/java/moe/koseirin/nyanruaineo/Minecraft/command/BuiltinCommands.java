@@ -16,7 +16,6 @@ import moe.koseirin.nyanruaineo.Minecraft.config.cfg.BackendServer;
 import moe.koseirin.nyanruaineo.Minecraft.config.cfg.ServerListConfig;
 import moe.koseirin.nyanruaineo.Minecraft.connection.ServerConnection;
 import moe.koseirin.nyanruaineo.Minecraft.connection.UserConnection;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.Kick;
 import moe.koseirin.nyanruaineo.Minecraft.service.*;
 import moe.koseirin.nyanruaineo.entity.BanUserList;
 import moe.koseirin.nyanruaineo.repository.AccountsRepository;
@@ -323,7 +322,7 @@ public class BuiltinCommands {
             return;
         }
         BanUserList ban = proxyBanService.ban(banTarget, reason, expire, sender.getName(), ProxyBanService.TYPE_GAME_BAN);
-        target.getChannel().writeAndFlush(new Kick("数据未更新")).addListener(future -> target.close());
+        playerKickService.disconnect(target, proxyBanService.renderBanMessage(ban, target.getUsername()));
         sender.sendMessage("§a已封禁 " + target.getUsername() + " (BanID: " + ban.getBanID() + ")");
     }
 

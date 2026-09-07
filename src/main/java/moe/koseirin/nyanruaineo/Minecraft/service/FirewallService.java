@@ -60,7 +60,7 @@ public class FirewallService {
         IpState state = states.computeIfAbsent(ip, key -> new IpState());
         synchronized (state) {
             if (isBanned(state, cfg)) {
-                log.warn("Firewall: rejected connection from banned IP {}", ip);
+//                log.warn("Firewall: rejected connection from banned IP {}", ip);
                 return false;
             }
 
@@ -216,6 +216,7 @@ public class FirewallService {
 
     private void ban(IpState state, FirewallConfig cfg, String reason, String ip) {
         state.bannedUntil = System.currentTimeMillis() + cfg.getBanDurationSeconds() * 1000L;
+        //TODO IP属地查询
         log.warn("Firewall: banned IP {} for {} seconds ({})", ip, cfg.getBanDurationSeconds(), reason);
     }
 

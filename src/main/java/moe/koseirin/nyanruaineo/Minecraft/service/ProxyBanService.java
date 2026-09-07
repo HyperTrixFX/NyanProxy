@@ -7,8 +7,9 @@ package moe.koseirin.nyanruaineo.Minecraft.service;
 
 import lombok.extern.slf4j.Slf4j;
 import moe.koseirin.nyanruaineo.Minecraft.config.ProxyProperties;
-import moe.koseirin.nyanruaineo.Minecraft.config.cfg.KickMessageConfig;
+import moe.koseirin.nyanruaineo.Minecraft.config.cfg.BanMessageConfig;
 import moe.koseirin.nyanruaineo.Minecraft.util.ChatComponentUtils;
+import moe.koseirin.nyanruaineo.Minecraft.util.DisconnectMessageRenderer;
 import moe.koseirin.nyanruaineo.entity.BanUserList;
 import moe.koseirin.nyanruaineo.repository.BanUserRepository;
 import moe.koseirin.nyanruaineo.repository.YggdrasilRepository;
@@ -17,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -95,27 +97,23 @@ public class ProxyBanService {
         return saved;
     }
 
-    /** 构造登录阶段的封禁踢出画面 JSON 字符串。 */
-    public String buildBanKickJson(BanUserList ban) {
-        KickMessageConfig config = properties.getKickMessageConfig();
-        StringBuilder message = new StringBuilder();
-        for (String line : config.getBannedMessageBase().split("[\n|]")) {
-            String trimmed = line.trim();
-            if (trimmed.isEmpty()) {
-                continue;
-            }
-            if (!message.isEmpty()) {
-                message.append('\n');
-            }
-            message.append(trimmed);
-        }
+    /** 渲染封禁画面为 {@code §} 颜色码文本（游戏阶段断开连接与登录阶段 Kick 共用）。 */
+    public String renderBanMessage(BanUserList ban, String playerName) {
+        BanMessageConfig config = properties.getBanMessageConfig();
+        String template = (config.isEnabled() && config.getBannedMessageBase() != null)
+                ? config.getBannedMessageBase()
+                : "&cYou are banned!\n&7Reason: &f$reason";
+        String expire = ban.getExpireTime() == null ? "永久" : ban.getExpireTime().toString();
+        return DisconnectMessageRenderer.render(template, Map.of(
+                "$playerName", playerName == null ? "" : playerName,
+                "$reason", ban.getReason() == null ? "" : ban.getReason(),
+                "$banId", ban.getBanID() == null ? "" : ban.getBanID(),
+                "$expireTime", expire));
+    }
 
-        return ChatComponentUtils.component(message.toString()
-                .replace('&', '\u00A7')
-                .replace("$playerUID", ban.getUid())
-                .replace("$reason", ban.getReason())
-                .replace("$idRandom", ban.getBanID())
-                .replace("$ExpireTime", ban.getExpireTime().toString())).toJSONString();
+    /** 构造登录阶段（Kick 0x00）的封禁踢出画面 JSON 字符串。 */
+    public String buildBanKickJson(BanUserList ban, String playerName) {
+        return ChatComponentUtils.component(renderBanMessage(ban, playerName)).toJSONString();
     }
 
     private String generateBanId() {

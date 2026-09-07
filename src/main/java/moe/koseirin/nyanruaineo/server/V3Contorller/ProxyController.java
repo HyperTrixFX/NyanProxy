@@ -8,8 +8,10 @@ package moe.koseirin.nyanruaineo.server.V3Contorller;
 import moe.koseirin.nyanruaineo.Minecraft.config.cfg.BackendServer;
 import moe.koseirin.nyanruaineo.dto.PlayerKickDTO;
 import moe.koseirin.nyanruaineo.dto.PlayerTransferDTO;
+import moe.koseirin.nyanruaineo.dto.ServerCredentialDTO;
 import moe.koseirin.nyanruaineo.utils.System.PermissionNodes;
 import moe.koseirin.nyanruaineo.services.PermissionService;
+import moe.koseirin.nyanruaineo.services.ServerListService;
 import moe.koseirin.nyanruaineo.repository.BanUserRepository;
 import moe.koseirin.nyanruaineo.repository.UserDevicesRepository;
 import moe.koseirin.nyanruaineo.services.impl.ProxyFuncImpl;
@@ -42,17 +44,19 @@ public class ProxyController {
     private final utilset utilset;
     private final UserDevicesRepository userDevicesRepository;
     private final BanUserRepository banUserRepository;
+    private final ServerListService serverListService;
     private final Respond respond;
 
     @Value("${yggdrasil.privateKey}")
     private String privateKey;
 
-    public ProxyController(ProxyFuncImpl proxyFunc, PermissionService permissionService, utilset utilset, UserDevicesRepository userDevicesRepository, BanUserRepository banUserRepository, Respond respond) {
+    public ProxyController(ProxyFuncImpl proxyFunc, PermissionService permissionService, utilset utilset, UserDevicesRepository userDevicesRepository, BanUserRepository banUserRepository, ServerListService serverListService, Respond respond) {
         this.proxyFunc = proxyFunc;
         this.permissionService = permissionService;
         this.utilset = utilset;
         this.userDevicesRepository = userDevicesRepository;
         this.banUserRepository = banUserRepository;
+        this.serverListService = serverListService;
         this.respond = respond;
     }
 
@@ -88,6 +92,44 @@ public class ProxyController {
             return forbidden();
         }
         return proxyFunc.removeServer(uid);
+    }
+
+
+    // 后端子服务器鉴权凭据管理（v7 接口使用；创建/重置时返回一次性 Token）
+    @GetMapping("/serverlist")
+    public ResponseEntity<?> listServerCredentials(@RequestHeader(value = "Authorization", required = false) String authorization) {
+        if (!authorized(authorization)) {
+            return forbidden();
+        }
+        return serverListService.list();
+    }
+
+    @PostMapping("/serverlist")
+    public ResponseEntity<?> createServerCredential(@RequestHeader(value = "Authorization", required = false) String authorization, @RequestBody ServerCredentialDTO dto) {
+        if (!authorized(authorization)) {
+            return forbidden();
+        }
+        return serverListService.create(dto == null ? null : dto.getUid(), dto == null ? null : dto.getServerName(), resolveUid(authorization));
+    }
+
+    @PutMapping("/serverlist/{uid}")
+    public ResponseEntity<?> updateServerCredential(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String uid, @RequestBody ServerCredentialDTO dto) {
+        if (!authorized(authorization)) {
+            return forbidden();
+        }
+        return serverListService.update(uid,
+                dto == null ? null : dto.getServerName(),
+                dto == null ? null : dto.getEnabled(),
+                dto == null ? null : dto.getRegenerate(),
+                resolveUid(authorization));
+    }
+
+    @DeleteMapping("/serverlist/{uid}")
+    public ResponseEntity<?> deleteServerCredential(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String uid) {
+        if (!authorized(authorization)) {
+            return forbidden();
+        }
+        return serverListService.delete(uid);
     }
 
 
