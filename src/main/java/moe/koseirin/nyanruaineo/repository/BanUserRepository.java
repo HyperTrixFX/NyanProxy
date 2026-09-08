@@ -56,6 +56,15 @@ public interface BanUserRepository extends JpaRepository<BanUserList, String>, S
     @Query("UPDATE BanUserList b SET b.isActive = false WHERE b.uid = ?1 AND b.isActive = true")
     int deactivateByUid(String uid);
 
+    /**
+     * 把某个 Minecraft UUID 下所有 {@code TARGET_UUID} 封禁迁移到指定 NyanID uid（转为 {@code TARGET_UID}）。
+     * 用于正版玩家绑定到 NyanID 后，把历史封禁同步到账户上（含已过期/已解封的历史记录）。
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE BanUserList b SET b.uid = ?2, b.TargetType = 0 WHERE b.uid = ?1 AND b.TargetType = 1")
+    int migrateUuidBansToUid(String uuid, String uid);
+
     /** 是否存在该 uid 下仍在生效的封禁（活跃异常）。 */
     @Query("SELECT COUNT(b) > 0 FROM BanUserList b WHERE b.uid = ?1 AND b.isActive = true")
     boolean existsByUidAndIsActiveTrue(String uid);

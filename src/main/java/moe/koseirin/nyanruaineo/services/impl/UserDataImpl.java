@@ -2,6 +2,7 @@ package moe.koseirin.nyanruaineo.services.impl;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import moe.koseirin.nyanruaineo.Minecraft.MinecraftProxy;
 import moe.koseirin.nyanruaineo.Minecraft.connection.UserConnection;
 import moe.koseirin.nyanruaineo.Minecraft.service.PlayerMessageService;
@@ -10,6 +11,7 @@ import moe.koseirin.nyanruaineo.NyanIdApplication;
 import moe.koseirin.nyanruaineo.entity.Accounts;
 import moe.koseirin.nyanruaineo.entity.NyanIDuser;
 import moe.koseirin.nyanruaineo.repository.AccountsRepository;
+import moe.koseirin.nyanruaineo.repository.BanUserRepository;
 import moe.koseirin.nyanruaineo.repository.NyanIDuserRepository;
 import moe.koseirin.nyanruaineo.repository.UserDevicesRepository;
 import moe.koseirin.nyanruaineo.repository.YggdrasilRepository;
@@ -31,6 +33,7 @@ import java.util.Objects;
  * awa
  */
 
+@Slf4j
 @Component
 public class UserDataImpl {
 
@@ -40,6 +43,7 @@ public class UserDataImpl {
     private final UserDevicesRepository userDevicesRepository;
     private final YggdrasilRepository yggdrasilRepository;
     private final AccountsRepository accountsRepository;
+    private final BanUserRepository banUserRepository;
     private final EmailService emailService;
     private final RedisService redisService;
     private final StrictIpResolver strictIpResolver;
@@ -50,11 +54,12 @@ public class UserDataImpl {
 
 
 
-    public UserDataImpl(NyanIDuserRepository nyanIDuserRepository, UserDevicesRepository userDevicesRepository, YggdrasilRepository yggdrasilRepository, AccountsRepository accountsRepository, EmailService emailService, RedisService redisService, StrictIpResolver strictIpResolver, utilset utilset, Respond respond, MinecraftProxy minecraftProxy, PlayerQueryService playerQueryService, PlayerMessageService playerMessageService) {
+    public UserDataImpl(NyanIDuserRepository nyanIDuserRepository, UserDevicesRepository userDevicesRepository, YggdrasilRepository yggdrasilRepository, AccountsRepository accountsRepository, BanUserRepository banUserRepository, EmailService emailService, RedisService redisService, StrictIpResolver strictIpResolver, utilset utilset, Respond respond, MinecraftProxy minecraftProxy, PlayerQueryService playerQueryService, PlayerMessageService playerMessageService) {
         this.nyanIDuserRepository = nyanIDuserRepository;
         this.userDevicesRepository = userDevicesRepository;
         this.yggdrasilRepository = yggdrasilRepository;
         this.accountsRepository = accountsRepository;
+        this.banUserRepository = banUserRepository;
         this.emailService = emailService;
         this.redisService = redisService;
         this.strictIpResolver = strictIpResolver;
@@ -165,6 +170,12 @@ public class UserDataImpl {
         }
         //绑定Minecraft账号
         accountsRepository.BindMinecraftAccount(uuid.replace("-",""), account.getUid());
+        // 同步该 UUID 下的正版（TARGET_UUID）封禁记录到 NyanID 账户，使申诉/历史/活跃异常可见
+//        int migratedBans =
+        banUserRepository.migrateUuidBansToUid(uuid.replace("-", ""), account.getUid());
+//        if (migratedBans > 0) {
+//            log.info("Migrated {} ban(s) from Minecraft UUID {} to NyanID uid {}", migratedBans, uuid, account.getUid());
+//        }
         redisService.deleteValue(bindCode);
         redisService.deleteValue(uuidObject +"BindAccount");
         UserConnection playerInfo =  playerQueryService.getUserConnectionByUUID(uuid);

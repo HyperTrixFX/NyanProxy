@@ -1,4 +1,4 @@
-package moe.koseirin.nyanruaineo.server.YggdrasilServer;
+package moe.koseirin.nyanruaineo.services;
 
 /*
  * @author KoseiRin_
@@ -6,6 +6,7 @@ package moe.koseirin.nyanruaineo.server.YggdrasilServer;
  */
 
 import jakarta.servlet.http.HttpServletRequest;
+import moe.koseirin.nyanruaineo.entity.TexturesList;
 import moe.koseirin.nyanruaineo.repository.BanUserRepository;
 import moe.koseirin.nyanruaineo.repository.UserDevicesRepository;
 import moe.koseirin.nyanruaineo.repository.YggdrasilPlayerRepository;
@@ -13,15 +14,11 @@ import moe.koseirin.nyanruaineo.repository.YggdrasilRepository;
 import moe.koseirin.nyanruaineo.utils.ErrorUtils.ErrorResponse;
 import moe.koseirin.nyanruaineo.utils.Respond;
 import moe.koseirin.nyanruaineo.utils.SqlService.TexturesListService;
-import moe.koseirin.nyanruaineo.entity.TexturesList;
 import moe.koseirin.nyanruaineo.utils.utilset;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.imageio.ImageIO;
@@ -33,18 +30,17 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.util.Arrays;
-import java.util.concurrent.CompletableFuture;
 import java.util.logging.Logger;
 import java.util.zip.CRC32;
 
-@RestController
-@RequestMapping("api/yggdrasil/textures")
-public class Textures {
+/**
+ * Yggdrasil textures（皮肤 / 披风上传）业务逻辑。
+ */
+@Service
+public class YggdrasilTextureService {
 
     @Value("${yggdrasil.privateKey}")
     private String privateKey;
-    @Value("${yggdrasil.publicKey}")
-    private String publicKey;
 
     private final YggdrasilPlayerRepository yggdrasilPlayerRepository;
     private final YggdrasilRepository yggdrasilRepository;
@@ -69,7 +65,7 @@ public class Textures {
             (byte) 0x06
     };
 
-    public Textures(YggdrasilPlayerRepository yggdrasilPlayerRepository, YggdrasilRepository yggdrasilRepository, UserDevicesRepository userDevicesRepository, BanUserRepository banUserRepository, utilset utilset, TexturesListService texturesListService, Respond respond) {
+    public YggdrasilTextureService(YggdrasilPlayerRepository yggdrasilPlayerRepository, YggdrasilRepository yggdrasilRepository, UserDevicesRepository userDevicesRepository, BanUserRepository banUserRepository, utilset utilset, TexturesListService texturesListService, Respond respond) {
         this.yggdrasilPlayerRepository = yggdrasilPlayerRepository;
         this.yggdrasilRepository = yggdrasilRepository;
         this.userDevicesRepository = userDevicesRepository;
@@ -79,33 +75,31 @@ public class Textures {
         this.respond = respond;
     }
 
-    @PutMapping("skin")
-    public <T> CompletableFuture<ResponseEntity<?>> PutSkin(@RequestParam(value = "skin", required = false) T skin, @RequestParam(value = "model", required = false) T model, HttpServletRequest request) throws Exception {
+    public ResponseEntity<?> putSkin(MultipartFile skin, String model, HttpServletRequest request) throws Exception {
         String Authorization = request.getHeader("Authorization");
         String raw = Authorization.replace("Bearer ", "").replace(" ", "");
         String Token = utilset.decrypt(raw, privateKey);
         String uid = userDevicesRepository.findUidByToken(Token);
         if (uid == null || banUserRepository.existsByUidAndIsActiveTrue(uid)) {
-            return CompletableFuture.completedFuture(respond.respond(MediaType.APPLICATION_JSON, 403, new ErrorResponse("账户状态异常，资料为只读，无法修改", "ForbiddenOperationException", "ForbiddenOperationException")));
+            return respond.respond(MediaType.APPLICATION_JSON, 403, new ErrorResponse("账户状态异常，资料为只读，无法修改", "ForbiddenOperationException", "ForbiddenOperationException"));
         }
         if (yggdrasilRepository.GetPlayerNAME(uid) == null) {
-            return CompletableFuture.completedFuture(respond.respond(MediaType.APPLICATION_JSON, 400,new ErrorResponse("您不存在Yggdrasil账户", "Illegal Request", "Illegal Request")));
+            return respond.respond(MediaType.APPLICATION_JSON, 400, new ErrorResponse("您不存在Yggdrasil账户", "Illegal Request", "Illegal Request"));
         }
         if (skin == null) {
-            return CompletableFuture.completedFuture(respond.respond(MediaType.APPLICATION_JSON, 400,new ErrorResponse("RequestParam skin is NULL  MiaoWu~", "Illegal Request", "Illegal Request")));
+            return respond.respond(MediaType.APPLICATION_JSON, 400, new ErrorResponse("RequestParam skin is NULL  MiaoWu~", "Illegal Request", "Illegal Request"));
         }
-        MultipartFile skinFile = (MultipartFile) skin;
-        if (!isValidPng(skinFile)) {
-            return CompletableFuture.completedFuture(respond.respond(MediaType.APPLICATION_JSON, 400,new ErrorResponse("非法图像文件喵！", "Illegal Request", "Illegal Request")));
+        if (!isValidPng(skin)) {
+            return respond.respond(MediaType.APPLICATION_JSON, 400, new ErrorResponse("非法图像文件喵！", "Illegal Request", "Illegal Request"));
         }
 
-        InputStream inputStream = skinFile.getInputStream();
+        InputStream inputStream = skin.getInputStream();
         String hash = getHash(inputStream);
         inputStream.close();
 
         int type = 1;
         if (model != null) {
-            type = switch ((String) model) {
+            type = switch (model) {
                 case "default" -> 1;
                 case "slim" -> 0;
                 default -> 1;
@@ -128,7 +122,7 @@ public class Textures {
             texturesList.setCreate_time(System.currentTimeMillis());
             texturesListService.save(texturesList);
 
-            try (InputStream inputStream1 = skinFile.getInputStream()) {
+            try (InputStream inputStream1 = skin.getInputStream()) {
                 BufferedImage src = ImageIO.read(inputStream1);
                 ImageIO.write(src, "png", new File(String.valueOf(skinPath)));
             } catch (Exception e) {
@@ -136,30 +130,28 @@ public class Textures {
             }
         }
 
-        return CompletableFuture.completedFuture(ResponseEntity.status(204).build());
+        return ResponseEntity.status(204).build();
     }
 
-    @PutMapping("cape")
-    public <T> CompletableFuture<ResponseEntity<?>> PutCape(@RequestParam(value = "cape", required = false) T cape, HttpServletRequest request) throws Exception {
+    public ResponseEntity<?> putCape(MultipartFile cape, HttpServletRequest request) throws Exception {
         String Authorization = request.getHeader("Authorization");
         String raw = Authorization.replace("Bearer ", "").replace(" ", "");
         String Token = utilset.decrypt(raw, privateKey);
         String uid = userDevicesRepository.findUidByToken(Token);
         if (uid == null || banUserRepository.existsByUidAndIsActiveTrue(uid)) {
-            return CompletableFuture.completedFuture(respond.respond(MediaType.APPLICATION_JSON, 403, new ErrorResponse("账户状态异常，资料为只读，无法修改", "ForbiddenOperationException", "ForbiddenOperationException")));
+            return respond.respond(MediaType.APPLICATION_JSON, 403, new ErrorResponse("账户状态异常，资料为只读，无法修改", "ForbiddenOperationException", "ForbiddenOperationException"));
         }
         if (yggdrasilRepository.GetPlayerNAME(uid) == null) {
-            return CompletableFuture.completedFuture(respond.respond(MediaType.APPLICATION_JSON, 400,new ErrorResponse("您不存在Yggdrasil账户", "Illegal Request", "Illegal Request")));
+            return respond.respond(MediaType.APPLICATION_JSON, 400, new ErrorResponse("您不存在Yggdrasil账户", "Illegal Request", "Illegal Request"));
         }
         if (cape == null) {
-            return CompletableFuture.completedFuture(respond.respond(MediaType.APPLICATION_JSON, 400,new ErrorResponse("RequestParam cape is NULL  MiaoWu~", "Illegal Request", "Illegal Request")));
+            return respond.respond(MediaType.APPLICATION_JSON, 400, new ErrorResponse("RequestParam cape is NULL  MiaoWu~", "Illegal Request", "Illegal Request"));
         }
-        MultipartFile capeFile = (MultipartFile) cape;
-        if (!isValidPng(capeFile)) {
-            return CompletableFuture.completedFuture(respond.respond(MediaType.APPLICATION_JSON, 400,new ErrorResponse("非法图像文件喵！", "Illegal Request", "Illegal Request")));
+        if (!isValidPng(cape)) {
+            return respond.respond(MediaType.APPLICATION_JSON, 400, new ErrorResponse("非法图像文件喵！", "Illegal Request", "Illegal Request"));
         }
 
-        InputStream inputStream = capeFile.getInputStream();
+        InputStream inputStream = cape.getInputStream();
         String hash = getHash(inputStream);
         inputStream.close();
 
@@ -177,7 +169,7 @@ public class Textures {
             texturesList.setCreate_time(System.currentTimeMillis());
             texturesListService.save(texturesList);
 
-            try (InputStream inputStream1 = capeFile.getInputStream()) {
+            try (InputStream inputStream1 = cape.getInputStream()) {
                 BufferedImage src = ImageIO.read(inputStream1);
                 ImageIO.write(src, "png", new File(String.valueOf(capePath)));
             } catch (Exception e) {
@@ -185,7 +177,7 @@ public class Textures {
             }
         }
 
-        return CompletableFuture.completedFuture(ResponseEntity.status(204).build());
+        return ResponseEntity.status(204).build();
     }
 
     private static String getHash(InputStream fis) throws Exception {
@@ -212,10 +204,10 @@ public class Textures {
                     Infile[8], Infile[9], Infile[10], Infile[11], Infile[12], Infile[13], Infile[14], Infile[15]};
             if (Arrays.equals(Header, PNG_HEADER)) {
                 // 解析宽高，限制尺寸，防止高分辨率低熵 PNG 解压炸弹导致 OOM
-                long width = ((long)(Infile[16] & 0xFF) << 24) | ((long)(Infile[17] & 0xFF) << 16)
-                        | ((long)(Infile[18] & 0xFF) << 8) | (Infile[19] & 0xFF);
-                long height = ((long)(Infile[20] & 0xFF) << 24) | ((long)(Infile[21] & 0xFF) << 16)
-                        | ((long)(Infile[22] & 0xFF) << 8) | (Infile[23] & 0xFF);
+                long width = ((long) (Infile[16] & 0xFF) << 24) | ((long) (Infile[17] & 0xFF) << 16)
+                        | ((long) (Infile[18] & 0xFF) << 8) | (Infile[19] & 0xFF);
+                long height = ((long) (Infile[20] & 0xFF) << 24) | ((long) (Infile[21] & 0xFF) << 16)
+                        | ((long) (Infile[22] & 0xFF) << 8) | (Infile[23] & 0xFF);
                 if (width <= 0 || height <= 0 || width > 1024 || height > 1024) {
                     return false;
                 }

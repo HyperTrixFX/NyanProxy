@@ -87,6 +87,16 @@ public class BackendServerController {
         return backendApiFunc.unban(dto == null ? null : dto.getUuid());
     }
 
+    /** 连接认证：校验某 UUID 当前是否由本代理转发（后端插件在登录时调用）。 */
+    @PostMapping("/players/verify")
+    public ResponseEntity<?> verify(@RequestHeader(value = "Authorization", required = false) String authorization,
+                                    @RequestBody BackendUnbanDTO dto) {
+        if (authenticate(authorization) == null) {
+            return unauthorized();
+        }
+        return backendApiFunc.verify(dto == null ? null : dto.getUuid());
+    }
+
     @PostMapping("/players/kick")
     public ResponseEntity<?> kick(@RequestHeader(value = "Authorization", required = false) String authorization,
                                   @RequestBody PlayerKickDTO dto) {

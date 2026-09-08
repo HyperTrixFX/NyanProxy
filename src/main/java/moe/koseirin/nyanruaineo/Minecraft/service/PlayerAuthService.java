@@ -5,7 +5,7 @@ import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import lombok.extern.slf4j.Slf4j;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.LoginSuccess;
-import moe.koseirin.nyanruaineo.server.YggdrasilServer.YggdrasilAuthService;
+import moe.koseirin.nyanruaineo.services.YggdrasilAuthService;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;

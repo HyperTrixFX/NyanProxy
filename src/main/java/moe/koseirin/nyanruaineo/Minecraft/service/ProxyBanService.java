@@ -11,6 +11,7 @@ import moe.koseirin.nyanruaineo.Minecraft.config.cfg.BanMessageConfig;
 import moe.koseirin.nyanruaineo.Minecraft.util.ChatComponentUtils;
 import moe.koseirin.nyanruaineo.Minecraft.util.DisconnectMessageRenderer;
 import moe.koseirin.nyanruaineo.entity.BanUserList;
+import moe.koseirin.nyanruaineo.repository.AccountsRepository;
 import moe.koseirin.nyanruaineo.repository.BanUserRepository;
 import moe.koseirin.nyanruaineo.repository.YggdrasilRepository;
 import org.springframework.stereotype.Service;
@@ -42,11 +43,13 @@ public class ProxyBanService {
     private final ProxyProperties properties;
     private final BanUserRepository banUserRepository;
     private final YggdrasilRepository yggdrasilRepository;
+    private final AccountsRepository accountsRepository;
 
-    public ProxyBanService(ProxyProperties properties, BanUserRepository banUserRepository, YggdrasilRepository yggdrasilRepository) {
+    public ProxyBanService(ProxyProperties properties, BanUserRepository banUserRepository, YggdrasilRepository yggdrasilRepository, AccountsRepository accountsRepository) {
         this.properties = properties;
         this.banUserRepository = banUserRepository;
         this.yggdrasilRepository = yggdrasilRepository;
+        this.accountsRepository = accountsRepository;
     }
 
     /** 封禁目标：类型 + 标识（UID 或 UUID）。 */
@@ -65,7 +68,7 @@ public class ProxyBanService {
         return bans.isEmpty() ? null : bans.getFirst();
     }
 
-    /** 把一个 Minecraft 玩家解析为封禁目标：Yggdrasil 玩家 → UID，否则 → UUID。 */
+    /** 把一个 Minecraft 玩家解析为封禁目标：Yggdrasil 玩家 → UID；绑定正版玩家 → UID；否则 → UUID。 */
     @Transactional(readOnly = true)
     public BanTarget resolveTarget(UUID mcUuid) {
         if (mcUuid == null) {
@@ -74,6 +77,11 @@ public class ProxyBanService {
         String uid = yggdrasilRepository.findNyanUidByUuid(mcUuid.toString());
         if (uid != null) {
             return new BanTarget(BanUserList.TARGET_UID, uid);
+        }
+        // 绑定了 Minecraft 账号的正版玩家：按 NyanID uid 解析，使封禁/解封/申诉都落到账户上
+        String boundUid = accountsRepository.GetUidByBind(mcUuid.toString().replace("-", ""));
+        if (boundUid != null) {
+            return new BanTarget(BanUserList.TARGET_UID, boundUid);
         }
         return new BanTarget(BanUserList.TARGET_UUID, mcUuid.toString().replace("-", ""));
     }

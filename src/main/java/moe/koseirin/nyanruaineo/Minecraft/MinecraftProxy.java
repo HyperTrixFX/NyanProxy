@@ -28,6 +28,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
 /**
  * 这个类是 Minecraft 代理服务器的启动入口。
  * 它负责管理 Netty 的事件循环线程，绑定端口监听客户端的连接，
@@ -81,6 +84,10 @@ public class MinecraftProxy {
     /** The players currently in the play phase, used to broadcast live TabList updates. */
     @Getter
     private final java.util.Set<UserConnection> onlineUsers = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** 正在连接但尚未进入 play 阶段的玩家（用于后端连接认证，登录时即可查到）。 */
+    private final ConcurrentHashMap<UUID, Long> connectingUsers = new ConcurrentHashMap<>();
+    private static final long CONNECTING_TTL_MILLIS = 60_000L;
 
     public MinecraftProxy(ProxyProperties properties,
                           PlayerAuthService playerAuthService,
@@ -161,6 +168,7 @@ public class MinecraftProxy {
 
     /** Called once a player reached the play phase. */
     public void playerJoined(UserConnection user) {
+        connectingUsers.remove(user.getUuid());
         onlineUsers.add(user);
         onlineCount.incrementAndGet();
         refreshTabList();
@@ -176,6 +184,33 @@ public class MinecraftProxy {
     /** The current number of online (play-phase) players. */
     public int getOnlineCount() {
         return onlineCount.get();
+    }
+
+    /** 标记一个正在连接后端（尚未进入 play 阶段）的玩家，用于后端连接认证。 */
+    public void markConnecting(UUID uuid) {
+        if (uuid != null) {
+            connectingUsers.put(uuid, System.currentTimeMillis() + CONNECTING_TTL_MILLIS);
+        }
+    }
+
+    /** 该 UUID 是否当前被代理转发中（正在连接或已在 play 阶段）。 */
+    public boolean isUuidKnown(UUID uuid) {
+        if (uuid == null) {
+            return false;
+        }
+        Long expire = connectingUsers.get(uuid);
+        if (expire != null) {
+            if (expire > System.currentTimeMillis()) {
+                return true;
+            }
+            connectingUsers.remove(uuid);
+        }
+        for (UserConnection user : onlineUsers) {
+            if (uuid.equals(user.getUuid())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

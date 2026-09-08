@@ -1,5 +1,4 @@
-package moe.koseirin.nyanruaineo.server.YggdrasilServer;
-
+package moe.koseirin.nyanruaineo.services;
 
 /*
  * @author KoseiRin_
@@ -9,60 +8,55 @@ package moe.koseirin.nyanruaineo.server.YggdrasilServer;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import jakarta.servlet.http.HttpServletRequest;
-import moe.koseirin.nyanruaineo.server.YggdrasilServer.Authserver.Json.CharacterInformationJson;
-import moe.koseirin.nyanruaineo.server.YggdrasilServer.Authserver.Json.Property;
-import moe.koseirin.nyanruaineo.server.YggdrasilServer.Authserver.Json.TexturesJson;
+import moe.koseirin.nyanruaineo.dto.yggdrasil.CharacterInformationJson;
+import moe.koseirin.nyanruaineo.dto.yggdrasil.Property;
+import moe.koseirin.nyanruaineo.entity.Yggdrasil;
+import moe.koseirin.nyanruaineo.repository.UserDevicesRepository;
+import moe.koseirin.nyanruaineo.repository.YggdrasilRepository;
 import moe.koseirin.nyanruaineo.utils.ErrorUtils.ErrorResponse;
 import moe.koseirin.nyanruaineo.utils.RedisUtils.RedisService;
-import moe.koseirin.nyanruaineo.repository.UserDevicesRepository;
-import moe.koseirin.nyanruaineo.repository.YggdrasilPlayerRepository;
-import moe.koseirin.nyanruaineo.repository.YggdrasilRepository;
-import moe.koseirin.nyanruaineo.entity.Yggdrasil;
 import moe.koseirin.nyanruaineo.utils.Respond;
 import moe.koseirin.nyanruaineo.utils.WebMvc.StrictIpResolver;
 import moe.koseirin.nyanruaineo.utils.utilset;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-@RestController
-@RequestMapping("api/yggdrasil/sessionserver/session/minecraft")
-public class Sessionserver {
+/**
+ * Yggdrasil sessionserver（join / hasJoined / profile）业务逻辑。
+ */
+@Service
+public class YggdrasilSessionService {
 
     private final YggdrasilRepository yggdrasilRepository;
-    private final YggdrasilPlayerRepository yggdrasilPlayerRepository;
     private final UserDevicesRepository userDevicesRepository;
     private final utilset utilset;
     private final RedisService redisService;
     private final StrictIpResolver strictIpResolver;
     private final Respond respond;
     private final YggdrasilAuthService yggdrasilAuthService;
-
-    @Value("${yggdrasil.APILocation}")
-    private String APILocation;
+    private final YggdrasilTexturesBuilder texturesBuilder;
 
     @Value("${yggdrasil.privateKey}")
     private String privateKey;
 
-    public Sessionserver(YggdrasilRepository yggdrasilRepository, YggdrasilPlayerRepository yggdrasilPlayerRepository, UserDevicesRepository userDevicesRepository, utilset utilset, RedisService redisService, StrictIpResolver strictIpResolver, Respond respond, YggdrasilAuthService yggdrasilAuthService) {
+    public YggdrasilSessionService(YggdrasilRepository yggdrasilRepository, UserDevicesRepository userDevicesRepository, utilset utilset, RedisService redisService, StrictIpResolver strictIpResolver, Respond respond, YggdrasilAuthService yggdrasilAuthService, YggdrasilTexturesBuilder texturesBuilder) {
         this.yggdrasilRepository = yggdrasilRepository;
-        this.yggdrasilPlayerRepository = yggdrasilPlayerRepository;
         this.userDevicesRepository = userDevicesRepository;
         this.utilset = utilset;
         this.redisService = redisService;
         this.strictIpResolver = strictIpResolver;
         this.respond = respond;
         this.yggdrasilAuthService = yggdrasilAuthService;
+        this.texturesBuilder = texturesBuilder;
     }
 
-    @PostMapping("join")
-    public ResponseEntity<?> ClientJoinServerHandle(@RequestBody(required = false) String data, HttpServletRequest request) {
+    public ResponseEntity<?> join(String data, HttpServletRequest request) {
         if (data == null) {
             return respond.respond(MediaType.APPLICATION_JSON, 403, new ErrorResponse("你请求的内容为NULL杂鱼喵!", "The parameter is incorrect", "The parameter is incorrect 杂鱼喵~"));
         }
@@ -109,8 +103,7 @@ public class Sessionserver {
         return ResponseEntity.status(204).build();
     }
 
-    @GetMapping("hasJoined")
-    public ResponseEntity<?> ServerVerifyClient(HttpServletRequest request) throws Exception {
+    public ResponseEntity<?> hasJoined(HttpServletRequest request) {
         String username = request.getParameter("username");
         String serverId = request.getParameter("serverId");
 
@@ -136,8 +129,7 @@ public class Sessionserver {
         return ResponseEntity.ok(new CharacterInformationJson(profile.getString("id"), profile.getString("name"), properties));
     }
 
-    @GetMapping({"profile/{uuid}", "profile/*", "profile"})
-    public ResponseEntity<?> GetPlayer(@PathVariable String uuid, HttpServletRequest request) throws Exception {
+    public ResponseEntity<?> profile(String uuid, HttpServletRequest request) {
         if (uuid == null) {
             return respond.respond(MediaType.APPLICATION_JSON, 403, new ErrorResponse("你请求的内容为NULL杂鱼喵!", "The parameter is incorrect", "The parameter is incorrect 杂鱼喵~"));
         }
@@ -164,32 +156,8 @@ public class Sessionserver {
             unsigned = Boolean.parseBoolean(unsignedParam);
         }
 
-        String model = (yggdrasilPlayerRepository.getSkinTexturesType(yggdrasil.getUuid()) == 1) ? "default" : "slim";
-
-        JSONObject texturesJson = new JSONObject();
-        texturesJson.put("timestamp", System.currentTimeMillis());
-        texturesJson.put("profileId", yggdrasil.getUuid().replace("-", ""));
-        texturesJson.put("profileName", yggdrasil.getPlayername());
-        texturesJson.put("signatureRequired", !unsigned);
-        JSONObject textures = new JSONObject();
-        texturesJson.put("textures", textures);
-
-        if (yggdrasil.getUseSkin()) {
-            TexturesJson.SkinTexture skin = new TexturesJson.SkinTexture(APILocation + "/api/zako/res/textures/" + yggdrasilPlayerRepository.getSkinTexturesHash(yggdrasil.getUuid()), new TexturesJson.TextureMetadata(model));
-            textures.put("SKIN", skin);
-        }
-        if (yggdrasil.getUseCAPE()) {
-            TexturesJson.SkinTexture cape = new TexturesJson.SkinTexture(APILocation + "/api/zako/res/textures/" + yggdrasilPlayerRepository.getCAPETexturesHash(yggdrasil.getUuid()), null);
-            textures.put("CAPE", cape);
-        }
-
-        String sign = null;
-        if (!unsigned) {
-            sign = utilset.sign(Base64.getEncoder().encode(texturesJson.toString().getBytes()), privateKey);
-        }
-
         List<Property> properties = new ArrayList<>();
-        properties.add(new Property("textures", Base64.getEncoder().encodeToString(texturesJson.toString().getBytes()), sign));
+        properties.add(texturesBuilder.buildTexturesProperty(yggdrasil.getUuid(), yggdrasil.getPlayername(), !unsigned, !unsigned));
 
         return ResponseEntity.ok(new CharacterInformationJson(yggdrasil.getUuid().replace("-", ""), yggdrasil.getPlayername(), properties));
     }

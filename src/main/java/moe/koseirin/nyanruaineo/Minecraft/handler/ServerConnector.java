@@ -102,6 +102,11 @@ public class ServerConnector {
         int port = backend.getPort();
         log.debug("{}: connecting to backend {} ({}:{})", user.getUsername(), backend.getName(), host, port);
 
+        // 后端连接认证：首次连接时先把该玩家标记为「正在连接」，后端插件可在登录时通过 v7 查询到。
+        if (!serverSwitch) {
+            proxy.markConnecting(user.getUuid());
+        }
+
         Bootstrap bootstrap = new Bootstrap()
                 .group(proxy.getWorkerGroup())
                 .channel(NioSocketChannel.class)

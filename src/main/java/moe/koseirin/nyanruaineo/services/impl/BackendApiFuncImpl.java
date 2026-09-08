@@ -125,6 +125,22 @@ public class BackendApiFuncImpl {
                 "timestamp", LocalDateTime.now());
     }
 
+    /** 校验某个 UUID 当前是否由本代理转发（后端连接认证用）。 */
+    public ResponseEntity<?> verify(String uuid) {
+        if (uuid == null || uuid.isBlank()) {
+            return badRequest("uuid is required");
+        }
+        UUID mcUuid = parseUuid(uuid.trim());
+        if (mcUuid == null) {
+            return badRequest("Invalid uuid: " + uuid);
+        }
+        boolean verified = proxy.isUuidKnown(mcUuid);
+        return respond.respond(MediaType.APPLICATION_JSON, 200,
+                "uuid", mcUuid.toString(),
+                "verified", verified,
+                "timestamp", LocalDateTime.now());
+    }
+
     /** 踢出在线玩家（复用代理已加固的逻辑）。 */
     public ResponseEntity<?> kick(String player, String reason) {
         return proxyFunc.kickPlayer(player, reason);
