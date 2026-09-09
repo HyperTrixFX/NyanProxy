@@ -22,6 +22,7 @@ import moe.koseirin.nyanruaineo.Minecraft.forge.ForgeConstants;
 import moe.koseirin.nyanruaineo.Minecraft.netty.PacketDecoder;
 import moe.koseirin.nyanruaineo.Minecraft.netty.PacketEncoder;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.DefinedPacket;
+import moe.koseirin.nyanruaineo.Minecraft.protocol.EntityRewrite;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.Protocol;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.ProtocolConstants;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.Chat;
@@ -168,6 +169,17 @@ public class UpstreamBridge extends ChannelInboundHandlerAdapter {
                 // Never fail forwarding because of a diagnostic read.
             }
         }
+
+        // Entity id rewrite (BungeeCord UpstreamBridge parity): translate the client's stable
+        // entity id back to the backend's fresh id in serverbound entity-addressed frames
+        // (Use Entity / Entity Action) after a pre-1.16 switch.
+        EntityRewrite entityRewrite = EntityRewrite.forVersion(user.getProtocolVersion());
+        if (entityRewrite != null && msg instanceof ByteBuf raw && raw.isReadable()) {
+            entityRewrite.rewriteServerbound(raw,
+                    proxy.getPlayerStateService().getClientEntityId(user),
+                    proxy.getPlayerStateService().getServerEntityId(user));
+        }
+
         server.getChannel().writeAndFlush(msg, server.getChannel().voidPromise());
     }
 

@@ -20,8 +20,10 @@ import moe.koseirin.nyanruaineo.Minecraft.netty.PacketDecoder;
 import moe.koseirin.nyanruaineo.Minecraft.netty.PacketEncoder;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.DefinedPacket;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.Protocol;
+import moe.koseirin.nyanruaineo.Minecraft.protocol.EntityRewrite;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.ProtocolConstants;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.BossBar;
+import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.EntityStatus;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.FinishConfiguration;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.JoinGame;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.PlayerInfoRemove;
@@ -270,6 +272,27 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
                 }
             } catch (Exception ignored) {
                 // Never break forwarding because of a replacement attempt.
+            }
+        }
+
+        // Entity id rewrite (BungeeCord DownstreamBridge parity): on a pre-1.16 server switch the
+        // client never got a new JoinGame, so it keeps its original entity id while the backend
+        // assigned a fresh one. Translate the backend id back to the client's stable id in every
+        // entity-addressed frame, otherwise velocity/status/metadata are silently dropped.
+        EntityRewrite entityRewrite = EntityRewrite.forVersion(user.getProtocolVersion());
+        if (entityRewrite != null) {
+            PlayerStateService playerState = proxy.getPlayerStateService();
+            if (msg instanceof ByteBuf raw && raw.isReadable()) {
+                entityRewrite.rewriteClientbound(raw, playerState.getServerEntityId(user),
+                        playerState.getClientEntityId(user));
+            } else if (msg instanceof EntityStatus status) {
+                int serverEntityId = playerState.getServerEntityId(user);
+                int clientEntityId = playerState.getClientEntityId(user);
+                if (status.getEntityId() == serverEntityId) {
+                    status.setEntityId(clientEntityId);
+                } else if (status.getEntityId() == clientEntityId) {
+                    status.setEntityId(serverEntityId);
+                }
             }
         }
 

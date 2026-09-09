@@ -414,11 +414,12 @@ public class ServerConnector {
         private void onJoinGame(JoinGame login) {
             int version = user.getProtocolVersion();
 
-            playerState.setClientEntityId(user, login.getEntityId());
-            playerState.setServerEntityId(user, login.getEntityId());
-
-            // First connection (any version) or 1.16+ switch: the JoinGame is sent directly.
+            // First connection (any version) or 1.16+ switch: the JoinGame is sent directly, so the
+            // client re-learns its own entity id from it — both ids become the backend's id
+            // (BungeeCord handleLogin first-connection/1.16+ branch).
             if (!serverSwitch || version >= 735) {
+                playerState.setClientEntityId(user, login.getEntityId());
+                playerState.setServerEntityId(user, login.getEntityId());
                 if (!serverSwitch) {
                     // The front-end already switched to GAME and installed the bridge when Login
                     // Success was sent (see onLoginSuccess); resume reading and register the
@@ -443,7 +444,9 @@ public class ServerConnector {
                 }
                 playerState.setDimension(user, login.getDimension());
             } else {
-                // Pre-1.16 switch: the legacy respawn dance (no JoinGame forwarded).
+                // Pre-1.16 switch: the legacy respawn dance (no JoinGame forwarded). The client
+                // never learns a new entity id, so clientEntityId stays stable while only the
+                // backend-side id is updated below (BungeeCord handleLogin pre-1.16 branch).
                 playerState.clearServerState(user, user::sendPacket);
                 proxy.getTabListService().resetTabList(user);
                 user.sendPacket(new EntityStatus(playerState.getClientEntityId(user),
