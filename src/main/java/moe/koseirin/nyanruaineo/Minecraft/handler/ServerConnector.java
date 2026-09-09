@@ -33,19 +33,7 @@ import moe.koseirin.nyanruaineo.Minecraft.netty.PacketEncoder;
 import moe.koseirin.nyanruaineo.Minecraft.netty.PipelineUtils;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.Protocol;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.ProtocolConstants;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.EncryptionRequest;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.EntityStatus;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.GameState;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.Handshake;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.JoinGame;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.Kick;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.LoginRequest;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.LoginSuccess;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.PluginMessage;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.SetCompression;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.StartConfiguration;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.TabListHeaderFooter;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.ViewDistance;
+import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.*;
 import moe.koseirin.nyanruaineo.Minecraft.config.cfg.BackendServer;
 import moe.koseirin.nyanruaineo.Minecraft.service.PlayerStateService;
 
@@ -487,6 +475,14 @@ public class ServerConnector {
                 PluginMessage brandMessage = user.getBrandMessage();
                 if (brandMessage != null) {
                     server.sendPacket(brandMessage);
+                }
+                // Replay the client's settings (skinParts → cape + second skin layer) so a switched
+                // backend broadcasts the correct skin layers instead of all-off (BungeeCord
+                // ServerConnector parity: ch.write(con.getSettings()) for pre-1.20.2).
+                ClientSettings clientSettings =
+                        user.getClientSettings();
+                if (clientSettings != null) {
+                    server.sendPacket(clientSettings);
                 }
             }
             Set<String> registeredChannels = user.getRegisteredChannels();
