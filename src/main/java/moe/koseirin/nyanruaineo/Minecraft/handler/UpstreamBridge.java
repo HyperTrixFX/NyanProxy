@@ -27,6 +27,7 @@ import moe.koseirin.nyanruaineo.Minecraft.protocol.EntityRewrite;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.Protocol;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.ProtocolConstants;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.*;
+import moe.koseirin.nyanruaineo.Minecraft.util.LogThrottle;
 
 /**
  * Relays client-to-server traffic to the backend, mirroring BungeeCord's {@code UpstreamBridge}.
@@ -349,7 +350,11 @@ public class UpstreamBridge extends ChannelInboundHandlerAdapter {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        log.warn("UpstreamBridge error for {}: {}", user.getUsername(), cause.getMessage());
+        // 限流：每个出错的连接都会走到这里，集中重连时会刷屏。
+        String gate = LogThrottle.acquire("upstream-error", 10_000L);
+        if (gate != null) {
+            log.warn("UpstreamBridge error for {}: {}{}", user.getUsername(), cause.getMessage(), gate);
+        }
         ctx.writeAndFlush(new Kick(
                         "{\"text\":\""+cause.getMessage()+"\",\"color\":\"red\"}"))
                 .addListener(ChannelFutureListener.CLOSE);

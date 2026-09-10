@@ -283,14 +283,43 @@ public class InitialHandler extends ChannelInboundHandlerAdapter {
             channel.writeAndFlush(new Kick("You are already connected to this proxy!"));
             channel.close();
         }
-        BanUserList ban = proxy.getProxyBanService().findGameBan(authenticatedUuid);
-        if (ban != null) {
-            log.info("{} ({}) blocked by game ban {} ({})", username, authenticatedUuid,
-                    ban.getBanID(), ban.getReason());
-            channel.writeAndFlush(new Kick(proxy.getProxyBanService().buildBanKickJson(ban, username)))
-                    .addListener(ChannelFutureListener.CLOSE);
-            return;
-        }
+        checkBanThenConnect(authenticatedUuid, authenticatedProperties);
+    }
+
+    /**
+     * 封禁查询<b>绝不可以</b>在 Netty 事件循环上同步执行：{@link
+     * moe.koseirin.nyanruaineo.Minecraft.service.ProxyBanService#findGameBan} 是阻塞的 JDBC 查询
+     * （一次登录最多三条 SQL）。在事件循环里查库会让该 worker 线程上的所有玩家一起卡住，
+     * 并发登录时所有事件循环都会停在数据库 I/O 上，并一起争抢 Hikari 连接池。
+     * 因此这里查到工作线程上执行，结果再回到事件循环继续登录。
+     * <p>
+     * 查询期间先暂停读取：这与过去「事件循环被阻塞、期间无法处理其它数据包」的时序保持一致，
+     * 免得登录尚未建立时又收到客户端的后续数据包。
+     */
+    private void checkBanThenConnect(UUID authenticatedUuid, List<LoginSuccess.Property> authenticatedProperties) {
+        channel.config().setAutoRead(false);
+        proxy.getProxyBanService().findGameBanAsync(authenticatedUuid)
+                .whenComplete((ban, error) -> channel.eventLoop().execute(() -> {
+                    if (error != null) {
+                        // 查询本身在 ProxyBanService 内部已经 fail-open，这里只是兜底。
+                        log.warn("Game ban check failed for {}, continuing the login: {}",
+                                username, error.toString());
+                    }
+                    if (ban != null) {
+                        log.info("{} ({}) blocked by game ban {} ({})", username, authenticatedUuid,
+                                ban.getBanID(), ban.getReason());
+                        channel.writeAndFlush(
+                                        new Kick(proxy.getProxyBanService().buildBanKickJson(ban, username)))
+                                .addListener(ChannelFutureListener.CLOSE);
+                        return;
+                    }
+                    startBackendConnection(authenticatedUuid, authenticatedProperties);
+                }));
+    }
+
+    /** 封禁检查通过之后的登录收尾：建立 UserConnection 并连接后端。 */
+    private void startBackendConnection(UUID authenticatedUuid,
+                                        List<LoginSuccess.Property> authenticatedProperties) {
         this.user = new UserConnection(channel);
         user.setUsername(username);
         user.setUuid(authenticatedUuid);
@@ -353,7 +382,7 @@ public class InitialHandler extends ChannelInboundHandlerAdapter {
         proxy.playerJoined(user);
         proxy.getEventBus().postAsync(
                 new PlayerJoinEvent(username, uuid, protocolVersion, server.getHost(), server.getPort()));
-        log.info("{} ({}) connected to backend {}:{}", username, uuid, server.getHost(), server.getPort());
+        logConnectedToBackend(server);
     }
 
     /**
@@ -388,8 +417,13 @@ public class InitialHandler extends ChannelInboundHandlerAdapter {
         proxy.playerJoined(user);
         proxy.getEventBus().postAsync(
                 new PlayerJoinEvent(username, uuid, protocolVersion, server.getHost(), server.getPort()));
-        log.info("{} ({}) connected to backend {}:{}", username, uuid, server.getHost(), server.getPort());
+        logConnectedToBackend(server);
     }
+    private void logConnectedToBackend(ServerConnection server) {
+        log.info("{} ({}) connected to backend {}:{} (protocol {})",
+                username, uuid, server.getHost(), server.getPort(), protocolVersion);
+    }
+
     private String remoteIp() {
         if (channel.remoteAddress() instanceof InetSocketAddress remote) {
             return remote.getAddress().getHostAddress();

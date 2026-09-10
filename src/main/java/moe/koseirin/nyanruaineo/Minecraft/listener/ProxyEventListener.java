@@ -33,13 +33,17 @@ public class ProxyEventListener {
 
     @EventHeader
     public void onPlayerJoin(PlayerJoinEvent event) {
-        log.info("[ProxyEvent] PlayerJoin: {} ({}) protocol={} joined {}:{}",
+        // 降为 DEBUG：玩家进服的那条 INFO 由 InitialHandler#logConnectedToBackend 打印。
+        // 同一个事件以前会打三遍（这里、InitialHandler、PlayerAuthService 的认证成功），
+        // 高并发/集中重连时这些重复行既无信息增量，又会让同步的控制台 appender 阻塞事件循环。
+        log.debug("[ProxyEvent] PlayerJoin: {} ({}) protocol={} joined {}:{}",
                 event.username(), event.uuid(), event.protocolVersion(), event.serverHost(), event.serverPort());
 
     }
 
     @EventHeader
     public void onPlayerDisconnect(PlayerDisconnectEvent event) {
+        // 保留 INFO：这是每个玩家会话唯一的「退出」记录。
         if (event.username() != null) log.info("[ProxyEvent] PlayerDisconnect: {} ({})", event.username(), event.uuid());
 
     }

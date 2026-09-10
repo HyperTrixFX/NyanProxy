@@ -36,6 +36,7 @@ import moe.koseirin.nyanruaineo.Minecraft.protocol.ProtocolConstants;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.*;
 import moe.koseirin.nyanruaineo.Minecraft.config.cfg.BackendServer;
 import moe.koseirin.nyanruaineo.Minecraft.service.PlayerStateService;
+import moe.koseirin.nyanruaineo.Minecraft.util.LogThrottle;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -123,7 +124,12 @@ public class ServerConnector {
 
         bootstrap.connect(host, port).addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
-                log.error("Could not connect to backend {}:{} for {},cause: {}", host, port, user.getUsername(), future.cause().getMessage());
+                // 限流：后端子服挂掉时，每个玩家的每次重连都会走到这里，很容易刷屏。
+                String gate = LogThrottle.acquire("backend-connect-failed", 10_000L);
+                if (gate != null) {
+                    log.error("Could not connect to backend {}:{} for {},cause: {}{}",
+                            host, port, user.getUsername(), future.cause().getMessage(), gate);
+                }
                 disconnectClient("{\"text\":\"代号325空降失败了喵～因为系统找不到着陆点喵～\"}");
                 return;
             }
@@ -544,7 +550,11 @@ public class ServerConnector {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            log.warn("Backend login error for {},[{}]", user.getUsername(), cause.getMessage());
+            // 限流：后端登录阶段异常同样是「每个玩家一条」，集中重连时会刷屏。
+            String gate = LogThrottle.acquire("backend-login-error", 10_000L);
+            if (gate != null) {
+                log.warn("Backend login error for {},[{}]{}", user.getUsername(), cause.getMessage(), gate);
+            }
             user.close();
         }
     }

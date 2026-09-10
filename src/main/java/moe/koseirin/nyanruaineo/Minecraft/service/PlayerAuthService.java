@@ -5,6 +5,7 @@ import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import lombok.extern.slf4j.Slf4j;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.LoginSuccess;
+import moe.koseirin.nyanruaineo.Minecraft.util.LogThrottle;
 import moe.koseirin.nyanruaineo.services.YggdrasilAuthService;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -43,7 +44,9 @@ public class PlayerAuthService {
                 JSONObject externalProfile = yggdrasilAuthService.hasJoined(username, serverId);
                 if (externalProfile != null) {
                     PlayerProfile profile = parseProfile(externalProfile);
-                    log.info("Yggdrasil authentication successful for {} ({}) with {} properties",
+                    // DEBUG：每次登录都打一条「认证成功」属于重复信息，玩家进服的 INFO 由
+                    // InitialHandler 负责（这里两个分支以前各打一条 INFO）。
+                    log.debug("Yggdrasil authentication successful for {} ({}) with {} properties",
                             profile.name(), profile.uuid(), profile.properties().size());
                     return profile;
                 }
@@ -51,14 +54,18 @@ public class PlayerAuthService {
                 // 2) Mojang session server fallback.
                 PlayerProfile profile = authenticateWithMojang(username, serverId);
                 if (profile != null) {
-                    log.info("Mojang authentication successful for {} ({}) with {} properties",
+                    log.debug("Mojang authentication successful for {} ({}) with {} properties",
                             profile.name(), profile.uuid(), profile.properties().size());
                 }
                 return profile;
             } catch (Exception e) {
                 // A failed session is a normal login rejection, not a server error: complete with
                 // null so the login handler can answer the client with an "invalid session" kick.
-                log.warn("Authentication failed for {}: {}", username, e.getMessage());
+                // 限流：账号扫描/集中重连时这里会刷屏。
+                String gate = LogThrottle.acquire("auth-failed", 10_000L);
+                if (gate != null) {
+                    log.warn("Authentication failed for {}: {}{}", username, e.getMessage(), gate);
+                }
                 return null;
             }
         });

@@ -24,6 +24,8 @@ import java.util.List;
  */
 public class PacketDecoder extends MessageToMessageDecoder<ByteBuf> {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PacketDecoder.class);
+
     @Setter
     @Getter
     private Protocol protocol;
@@ -62,9 +64,8 @@ public class PacketDecoder extends MessageToMessageDecoder<ByteBuf> {
                 if (next != null) {
                     Protocol from = protocol;
                     protocol = next;
-                    if (org.slf4j.LoggerFactory.getLogger(PacketDecoder.class).isDebugEnabled()) {
-                        org.slf4j.LoggerFactory.getLogger(PacketDecoder.class).debug(
-                                "{} decode {} -> {} after {} (v{})", direction, from, next,
+                    if (log.isDebugEnabled()) {
+                        log.debug("{} decode {} -> {} after {} (v{})", direction, from, next,
                                 packet.getClass().getSimpleName(), protocolVersion);
                     }
                 }
@@ -77,9 +78,12 @@ public class PacketDecoder extends MessageToMessageDecoder<ByteBuf> {
                 // flowing even when the local protocol table is incomplete.
                 in.resetReaderIndex();
                 out.add(in.retain());
-                org.slf4j.LoggerFactory.getLogger(PacketDecoder.class).debug(
-                        "decode failed for {} packet 0x{} ({}); relaying raw", direction,
-                        Integer.toHexString(packetId), ex.toString());
+                // 注意：这条日志本身也要先判级别。slf4j 的占位符虽然延迟格式化，但变参数组
+                // 和装箱在关闭日志时依然会发生，而这是一条「解码失败就会走到」的热路径。
+                if (log.isDebugEnabled()) {
+                    log.debug("decode failed for {} packet 0x{} ({}); relaying raw", direction,
+                            Integer.toHexString(packetId), ex.toString());
+                }
             }
         } else {
             in.resetReaderIndex();

@@ -153,8 +153,8 @@ public class PlayerTransferService {
 
     /** 真正执行切换；调用前必须已经由 {@link #beginTransfer} 占位。 */
     private void doTransfer(UserConnection user, BackendServer target) {
-        log.info("Transferring {} to {} ({}:{})", user.getUsername(), target.getName(),
-                target.getHost(), target.getPort());
+//        log.info("Transferring {} to {} ({}:{})", user.getUsername(), target.getName(),
+//                target.getHost(), target.getPort());
 
         // Leaving a Forge server: reset the client's FML handshake so the next backend starts
         // from a clean HELLO state (BungeeCord ServerConnector.handle(LoginSuccess)).

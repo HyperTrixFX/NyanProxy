@@ -67,6 +67,30 @@ public abstract class DefinedPacket {
         return out;
     }
 
+    /**
+     * 读取位于 {@code readerIndex} 的 VarInt 但<b>不移动</b>读取指针，也不分配任何对象。
+     * <p>
+     * 热路径上（每个数据包都要判断一次包 ID）不能用 {@code buf.duplicate()} + {@code readVarInt}
+     * 那种写法：那会给每个数据包都额外分配一个 ByteBuf 包装对象。这个版本直接用
+     * {@link ByteBuf#getByte(int)} 按下标窥视，只有真正需要解析时才做复制。
+     */
+    public static int peekVarInt(ByteBuf input) {
+        int readerIndex = input.readerIndex();
+        int readable = input.readableBytes();
+        int result = 0;
+        for (int shift = 0; shift < 35; shift += 7) {
+            if (shift / 7 >= readable) {
+                throw new IllegalArgumentException("VarInt truncated");
+            }
+            byte b = input.getByte(readerIndex + shift / 7);
+            result |= (b & 0x7F) << shift;
+            if ((b & 0x80) == 0) {
+                return result;
+            }
+        }
+        throw new IllegalArgumentException("VarInt too big");
+    }
+
     public static void writeString(String value, ByteBuf output) {
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
         writeVarInt(bytes.length, output);

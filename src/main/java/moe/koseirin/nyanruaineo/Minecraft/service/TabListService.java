@@ -69,6 +69,15 @@ public class TabListService {
         return config;
     }
 
+    /**
+     * Whether the TabList rewriting feature is currently enabled. Callers on hot paths (for example
+     * the online-count broadcast triggered by every join/quit) can use this to skip iterating all
+     * players entirely when the feature is off.
+     */
+    public boolean isEnabled() {
+        return config().isEnabled();
+    }
+
     /** The configured server list with the same short cache (resolved per TabList entry). */
     private List<BackendServer> servers() {
         long now = System.currentTimeMillis();

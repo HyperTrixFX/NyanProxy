@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+日志配置：把控制台输出改成异步写。
+
+为什么需要这个文件：logback 默认的 ConsoleAppender 是同步的，日志语句在哪个线程执行，
+写 stdout 的 write 系统调用就在哪个线程上发生。代理端的大量日志正好产生在 Netty 事件循环
+线程上（每个连接、每个出错的数据包），一旦日志量上来，事件循环就被日志写入阻塞，
+连带把该线程上所有玩家的数据包处理一起拖慢 —— 也就是说「日志刷屏」本身就是一个性能问题。
+
+AsyncAppender 把日志事件丢进队列，由单独的线程负责真正写盘/写终端，事件循环线程只做入队。
+
+- queueSize 8192：满队列才可能丢日志。
+- neverBlock=true：队列满时直接丢弃日志而不是阻塞调用线程 —— 事件循环的实时性优先于日志完整性。
+- discardingThreshold=0：关闭 logback「队列快满就先丢 DEBUG/INFO」的默认策略，
+  只在整个队列真的写满时才丢，正常运行时不会无缘无故少日志。
+
+注意：因为 neverBlock=true，极端情况下（日志写入速度长期跟不上产生速度）会静默丢弃日志。
+如果你宁可阻塞也不愿意丢日志，把 neverBlock 改成 false 即可。
+
+日志级别仍然由 application.properties 的 logging.level.* 控制，Spring Boot 会在本文件
+加载之后应用这些设置，所以不需要在这里重复配置。
+-->
+<configuration>
+
+    <!-- 引入 Spring Boot 的日志默认值：转换词（%clr、%highlight、%wex 等）
+         以及由 logging.pattern.console 解析出来的 CONSOLE_LOG_PATTERN。 -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <!-- 引入 Spring Boot 的 CONSOLE appender 定义（使用上面的 pattern 与字符集）。 -->
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!-- 真正写控制台的 appender 外面再套一层异步队列。 -->
+    <appender name="ASYNC_CONSOLE" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="CONSOLE"/>
+        <queueSize>8192</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>true</neverBlock>
+        <!-- 不采集调用者行号：采集需要抛异常并构造栈帧，在高频日志下开销很大。 -->
+        <includeCallerData>false</includeCallerData>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="ASYNC_CONSOLE"/>
+    </root>
+
+</configuration>

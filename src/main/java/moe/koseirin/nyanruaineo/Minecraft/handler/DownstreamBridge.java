@@ -36,6 +36,7 @@ import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.TabListHeaderFooter;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.Team;
 import moe.koseirin.nyanruaineo.Minecraft.service.PlayerStateService;
 import moe.koseirin.nyanruaineo.Minecraft.util.ChatComponentUtils;
+import moe.koseirin.nyanruaineo.Minecraft.util.LogThrottle;
 
 /**
  * 负责把后端服务器发来的数据包转发给客户端。
@@ -46,6 +47,14 @@ import moe.koseirin.nyanruaineo.Minecraft.util.ChatComponentUtils;
  */
 @Slf4j
 public class DownstreamBridge extends ChannelInboundHandlerAdapter {
+
+    /**
+     * 「这一帧不是原始字节帧（是已解码的包对象），或者包 ID 没读出来」的哨兵值。
+     * 真实包 ID 恒为非负，所以不会与它冲突。
+     */
+    private static final int NO_PACKET_ID = -1;
+    /** 配置阶段承载注册表数据的原始帧包 ID（{@code registry_data}）。 */
+    private static final int CONFIG_REGISTRY_DATA_PACKET_ID = 0x07;
 
     private final MinecraftProxy proxy;
     private final UserConnection user;
@@ -77,6 +86,15 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
     private final java.util.Map<Integer, String> fullServerArgumentTypes = new java.util.TreeMap<>();
     /** 若原版注册表数据已包含完整的命令参数类型顺序，则为 true。 */
     private boolean fullArgumentTypesCaptured;
+    /**
+     * 前端（面向客户端）的 {@link PacketDecoder}，惰性解析一次后缓存。
+     * 热路径上不能用 {@code pipeline().get(PacketDecoder.class)}：那是遍历整条 pipeline 链表
+     * 并对每个节点做一次 {@code isAssignableFrom} 判断，之前每个原始帧还要做两次。
+     * 该 handler 实例在连接建立时就固定下来，之后只会切换它内部的协议状态，不会被替换。
+     */
+    private PacketDecoder frontendDecoder;
+    /** 前端解码器是否已经解析过（可能是 null 的负结果也要记住，避免反复遍历 pipeline）。 */
+    private boolean frontendDecoderResolved;
 
     public DownstreamBridge(MinecraftProxy proxy, UserConnection user, ServerConnection server) {
         this(proxy, user, server, null);
@@ -90,6 +108,20 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
         this.generation = user.getServerGeneration();
         this.onWorldEnter = onWorldEnter;
         this.firstJoin = onWorldEnter != null;
+    }
+
+    /**
+     * 前端解码器（用于判断客户端当前处于哪个协议阶段）；每个连接只查一次 pipeline。
+     * 仅在事件循环线程上调用，因此不需要同步。
+     */
+    private PacketDecoder frontendDecoder() {
+        if (!frontendDecoderResolved) {
+            frontendDecoder = user.getChannel() == null
+                    ? null
+                    : user.getChannel().pipeline().get(PacketDecoder.class);
+            frontendDecoderResolved = true;
+        }
+        return frontendDecoder;
     }
 
     @Override
@@ -127,21 +159,31 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
             }
         }
 
+        // 原始帧（未在 Protocol 中注册、按字节透传的数据包）的包 ID 只在此处窥视一次，
+        // 后面的几个判断都复用它。这里刻意不使用 buf.duplicate() + readVarInt：那会给
+        // 每个数据包都额外分配一个 ByteBuf 包装对象，而游戏阶段绝大多数帧走的都是这条路径。
+        // NO_PACKET_ID 表示「不是原始帧」或「包 ID 读取失败」，此时所有按 ID 判断的分支都跳过。
+        int framePacketId = NO_PACKET_ID;
+        if (msg instanceof ByteBuf peekBuf && peekBuf.isReadable()) {
+            try {
+                framePacketId = DefinedPacket.peekVarInt(peekBuf);
+            } catch (Exception ignored) {
+                // 诊断用途，读不出来就当没有 ID。
+            }
+        }
+
         // NeoForge 的冻结注册表同步必须正常进行（客户端需要回复 sync_completed，
         // 才能解除后端 known-packs 任务的阻塞）。此处仅为诊断目的：如果原始注册表数据帧中
         // 包含 command_argument_type 的顺序，则将其捕获（用于调试）。
-        if (msg instanceof ByteBuf raw && raw.isReadable()) {
-            try {
-                if (user.getProtocolVersion() >= ProtocolConstants.MINECRAFT_1_20_2
-                        && user.getChannel().pipeline().get(PacketDecoder.class) != null
-                        && user.getChannel().pipeline().get(PacketDecoder.class).getProtocol() == Protocol.CONFIGURATION) {
-                    int rawId = DefinedPacket.readVarInt(raw.duplicate());
-                    if (rawId == 0x07) {
-                        captureRegistryData(raw.duplicate());
-                    }
+        if (framePacketId == CONFIG_REGISTRY_DATA_PACKET_ID
+                && user.getProtocolVersion() >= ProtocolConstants.MINECRAFT_1_20_2) {
+            PacketDecoder decoder = frontendDecoder();
+            if (decoder != null && decoder.getProtocol() == Protocol.CONFIGURATION) {
+                try {
+                    captureRegistryData(((ByteBuf) msg).duplicate());
+                } catch (Exception ignored) {
+                    // Diagnostics must never break forwarding.
                 }
-            } catch (Exception ignored) {
-                // Diagnostics must never break forwarding.
             }
         }
 
@@ -182,29 +224,33 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
             if (log.isDebugEnabled()) {
                 String tag = pluginMessage.getTag();
                 byte[] data = pluginMessage.getData() == null ? new byte[0] : pluginMessage.getData();
-                String hex = java.util.HexFormat.of().formatHex(data, 0,
-                        Math.min(32, data.length));
                 // Full dump of the NeoForge frozen-registry / network-registry payloads: the client
                 // builds BuiltInRegistries.COMMAND_ARGUMENT_TYPE from these, so they must be audited
                 // byte-for-byte against the command tree parser ids.
                 boolean fullDump = tag != null && (tag.equals("neoforge:frozen_registry")
                         || tag.equals("neoforge:network") || tag.equals("neoforge:known_registry_data_maps"));
                 if (fullDump) {
-                    hex = java.util.HexFormat.of().formatHex(data);
                     if (tag.equals("neoforge:frozen_registry")) {
                         byte[] patched = patchFrozenRegistry(data);
                         if (patched != null) {
                             pluginMessage.setData(patched);
                             data = patched;
-                            hex = java.util.HexFormat.of().formatHex(data);
                             log.debug("{}: patched command_argument_type frozen snapshot: {} -> {} entries",
                                     user.getUsername(), serverArgumentTypes.size(), data.length);
                         }
                         captureArgumentTypeSnapshot(data);
                     }
                 }
+                // 只格式化前 32 字节。完整 payload（frozen registry / network registry 可能有上百 KB）
+                // 的 hex 化只在 TRACE 下进行：逐包把这么大的字节数组转成字符串会直接吃掉事件循环。
                 log.debug("{}: relaying play PluginMessage [{}] ({} bytes) data[{}..]{}", user.getUsername(),
-                        tag, data.length, hex, fullDump ? " FULL" : "");
+                        tag, data.length,
+                        java.util.HexFormat.of().formatHex(data, 0, Math.min(32, data.length)),
+                        fullDump ? " FULL" : "");
+                if (fullDump && log.isTraceEnabled()) {
+                    log.trace("{}: FULL PluginMessage [{}] ({} bytes): {}", user.getUsername(), tag,
+                            data.length, java.util.HexFormat.of().formatHex(data));
+                }
             }
             userChannel.writeAndFlush(pluginMessage, userChannel.voidPromise());
             return;
@@ -234,14 +280,9 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
             return;
         }
 
-        if (log.isDebugEnabled() && msg instanceof ByteBuf buf && buf.isReadable()) {
-            try {
-                int packetId = DefinedPacket.readVarInt(buf.duplicate());
-                log.debug("Downstream {} -> client: packetId=0x{}, bytes={}", user.getUsername(),
-                        Integer.toHexString(packetId), buf.readableBytes());
-            } catch (Exception ignored) {
-                // Never fail forwarding because of a diagnostic read.
-            }
+        if (log.isDebugEnabled() && framePacketId != NO_PACKET_ID) {
+            log.debug("Downstream {} -> client: packetId=0x{}, bytes={}", user.getUsername(),
+                    Integer.toHexString(framePacketId), ((ByteBuf) msg).readableBytes());
         }
 
         // 1.20.5+ declare_commands: NeoForge servers write every modded argument node with an
@@ -256,21 +297,20 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
         // dispatcher is non-empty, /server & co. are sent to the proxy, and joining works
         // universally for any NeoForge/Forge/vanilla client regardless of its registry state.
         // Packet id: 0x0E (1.19.3), 0x10 (1.19.4-1.20.1), 0x11 (1.20.2-1.21.4), 0x10 (1.21.5+).
-        if (msg instanceof ByteBuf raw && raw.isReadable()
-                && user.getProtocolVersion() >= ProtocolConstants.MINECRAFT_1_19_3) {
+        if (framePacketId != NO_PACKET_ID
+                && user.getProtocolVersion() >= ProtocolConstants.MINECRAFT_1_19_3
+                && framePacketId == declareCommandsId()) {
+            ByteBuf raw = (ByteBuf) msg;
             try {
-                int packetId = DefinedPacket.readVarInt(raw.duplicate());
-                if (packetId == declareCommandsId()) {
-                    // Extract the backend's top-level command names so the client can still
-                    // tab-complete them (merged into the synthetic tree as ask-server literals).
-                    // Falls back to the proxy-only tree when the backend tree can't be walked
-                    // (modded argument parsers).
-                    java.util.List<String> backendCommands = extractBackendCommandNames(raw);
-                    log.debug("{}: replacing backend command tree with proxy command tree ({} backend commands)",
-                            user.getUsername(), backendCommands == null ? "unparseable" : backendCommands.size());
-                    raw.release();
-                    msg = buildProxyCommandTree(backendCommands);
-                }
+                // Extract the backend's top-level command names so the client can still
+                // tab-complete them (merged into the synthetic tree as ask-server literals).
+                // Falls back to the proxy-only tree when the backend tree can't be walked
+                // (modded argument parsers).
+                java.util.List<String> backendCommands = extractBackendCommandNames(raw);
+                log.debug("{}: replacing backend command tree with proxy command tree ({} backend commands)",
+                        user.getUsername(), backendCommands == null ? "unparseable" : backendCommands.size());
+                raw.release();
+                msg = buildProxyCommandTree(backendCommands);
             } catch (Exception ignored) {
                 // Never break forwarding because of a replacement attempt.
             }
@@ -282,7 +322,8 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
         // itself — so the "backend connection closed" fallback would never run. Intercept that one
         // packet and route it through the same lobby fallback. Deliberate kicks (plugins, admins)
         // carry other reasons and are forwarded verbatim, so the player still sees their message.
-        if (msg instanceof ByteBuf raw && raw.isReadable()
+        if (msg instanceof ByteBuf raw
+                && framePacketId == ProtocolConstants.disconnectPacketId(user.getProtocolVersion())
                 && isBackendShutdownDisconnect(raw, user.getProtocolVersion())) {
             if (proxy.getPlayerTransferService().fallbackToLobby(user, server.getChannel())) {
                 raw.release();
@@ -1040,29 +1081,34 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
             } else if (msg instanceof ByteBuf buf && buf.isReadable()) {
                 int id = -1;
                 try {
-                    id = DefinedPacket.readVarInt(buf.duplicate());
+                    id = DefinedPacket.peekVarInt(buf);
                 } catch (Exception ignored) {
                 }
                 int len = buf.readableBytes();
-                String hex = java.util.HexFormat.of().formatHex(
-                        moe.koseirin.nyanruaineo.Minecraft.protocol.DefinedPacket.toArray(
-                                buf.duplicate()), 0, Math.min(64, len));
                 // 1.21.1 declare_commands (0x11): dump the FULL payload so the command-tree
                 // parser ids can be audited against the client's command_argument_type registry.
                 // Config registry data (0x7/0xd in CONFIGURATION): full dump so the client-side
                 // BuiltInRegistries.COMMAND_ARGUMENT_TYPE order can be reconstructed.
                 boolean isCommands = id == 0x11 && user.getProtocolVersion() >= 766 && user.getProtocolVersion() <= 769;
                 boolean isRegistryData = phase.contains("CONFIGURATION") && (id == 0x7 || id == 0xd);
-                if (isCommands || isRegistryData) {
-                    hex = java.util.HexFormat.of().formatHex(
-                            moe.koseirin.nyanruaineo.Minecraft.protocol.DefinedPacket.toArray(buf.duplicate()));
+                String hex = java.util.HexFormat.of().formatHex(
+                        moe.koseirin.nyanruaineo.Minecraft.protocol.DefinedPacket.toArray(
+                                buf.duplicate()), 0, Math.min(64, len));
+                log.debug("{}: clientbound raw frame id=0x{} ({} bytes) {} hex[{}..]{}", user.getUsername(),
+                        Integer.toHexString(id), len, phase, hex,
+                        isCommands ? " FULL-COMMANDS" : isRegistryData ? " FULL-REGISTRY" : "");
+                // 整段 payload 的 hex 化（命令树/注册表数据可能有几十上百 KB）只留给 TRACE：
+                // 在 DEBUG 下逐包做这件事本身就会把事件循环压垮，而它的价值只是「逐字节审计」。
+                if ((isCommands || isRegistryData) && log.isTraceEnabled()) {
+                    log.trace("{}: clientbound FULL payload id=0x{} ({} bytes): {}", user.getUsername(),
+                            Integer.toHexString(id), len,
+                            java.util.HexFormat.of().formatHex(
+                                    moe.koseirin.nyanruaineo.Minecraft.protocol.DefinedPacket.toArray(
+                                            buf.duplicate())));
                 }
                 if (isCommands) {
                     auditCommandTree(buf.duplicate());
                 }
-                log.debug("{}: clientbound raw frame id=0x{} ({} bytes) {} hex[{}..]{}", user.getUsername(),
-                        Integer.toHexString(id), len, phase, hex,
-                        isCommands ? " FULL-COMMANDS" : isRegistryData ? " FULL-REGISTRY" : "");
             }
         } catch (Exception ignored) {
             // Diagnostics must never break forwarding.
@@ -1092,14 +1138,16 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
      * （包级可见，便于回归测试直接调用。）
      */
     static boolean isBackendShutdownDisconnect(ByteBuf frame, int protocolVersion) {
+        // 调用方已经用 peekVarInt 确认过包 ID（每个原始帧只窥视一次，不做分配），
+        // 这里直接读原因字段：临时借用 readerIndex，读完立刻还原，因此不需要 duplicate()。
+        int savedReaderIndex = frame.readerIndex();
         try {
-            ByteBuf body = frame.duplicate();
-            if (DefinedPacket.readVarInt(body) != ProtocolConstants.disconnectPacketId(protocolVersion)) {
+            if (DefinedPacket.readVarInt(frame) != ProtocolConstants.disconnectPacketId(protocolVersion)) {
                 return false;
             }
             String reason = protocolVersion >= ProtocolConstants.MINECRAFT_1_20_3
-                    ? ChatComponentUtils.readNbtComponent(body).toJSONString() // 1.20.3+ 匿名 NBT 组件
-                    : DefinedPacket.readString(body);                          // 之前是 JSON 字符串
+                    ? ChatComponentUtils.readNbtComponent(frame).toJSONString() // 1.20.3+ 匿名 NBT 组件
+                    : DefinedPacket.readString(frame);                          // 之前是 JSON 字符串
             String lower = reason == null ? "" : reason.toLowerCase(java.util.Locale.ROOT);
             return lower.contains("server closed")
                     || lower.contains("server_closed")
@@ -1107,6 +1155,8 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
                     || lower.contains("服务器已关闭");
         } catch (Exception e) {
             return false;
+        } finally {
+            frame.readerIndex(savedReaderIndex);
         }
     }
 
@@ -1122,8 +1172,12 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        log.warn("DownstreamBridge error for {} from {}: {}", user.getUsername(),
-                server.getHost(), cause.getMessage());
+        // 限流：后端异常时每个玩家都会打一条，集中重连或后端抖动时很容易刷屏。
+        String gate = LogThrottle.acquire("downstream-error", 10_000L);
+        if (gate != null) {
+            log.warn("DownstreamBridge error for {} from {}: {}{}", user.getUsername(),
+                    server.getHost(), cause.getMessage(), gate);
+        }
         ctx.close();
     }
 }
