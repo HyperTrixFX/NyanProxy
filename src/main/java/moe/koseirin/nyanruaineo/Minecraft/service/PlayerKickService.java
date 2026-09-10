@@ -5,6 +5,7 @@ package moe.koseirin.nyanruaineo.Minecraft.service;
  * awa
  */
 
+import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -15,18 +16,20 @@ import moe.koseirin.nyanruaineo.Minecraft.config.ProxyProperties;
 import moe.koseirin.nyanruaineo.Minecraft.config.cfg.KickMessageConfig;
 import moe.koseirin.nyanruaineo.Minecraft.connection.UserConnection;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.DefinedPacket;
+import moe.koseirin.nyanruaineo.Minecraft.protocol.ProtocolConstants;
 import moe.koseirin.nyanruaineo.Minecraft.util.ChatComponentUtils;
+import moe.koseirin.nyanruaineo.Minecraft.util.DisconnectMessageRenderer;
 import org.springframework.stereotype.Component;
 
 import java.security.SecureRandom;
+import java.util.Map;
 
 /**
  * 以可自定义的踢出界面将玩家踢出代理端。
- * 消息模板位于 {@code proxy.kick-message} 数据库配置中
- * （包括带有 {@code &} 颜色代码、{@code \n}/{@code |} 换行符以及
- * {@code $playerName} / {@code $reason} / {@code $idRandom} 占位符的
- * {@code banned_message_base}），在关闭连接之前会通过版本适配的游戏阶段
- * Disconnect 数据包发送。
+ * 消息模板位于 {@code proxy.kick-message} 数据库配置中（{@code kick_message_base} 字段，
+ * 与封禁模板 {@code proxy.ban-message} 分离），支持 {@code &} 颜色代码、
+ * {@code \n}/{@code |} 换行符以及 {@code $playerName} / {@code $reason} / {@code $kickId} 占位符，
+ * 在关闭连接之前会通过版本适配的游戏阶段 Disconnect 数据包发送。
  */
 @Slf4j
 @Component
@@ -48,20 +51,69 @@ public class PlayerKickService {
             kid = randomId();
         }
         String message = buildMessage(user.getUsername(), reason == null ? "" : reason , kid);
+        log.info("Kicking {}: {}", user.getUsername(), reason);
+        disconnect(user, message);
+    }
+
+    /**
+     * 以指定消息（{@code §} 颜色码文本）向玩家发送「游戏阶段」断开连接数据包并关闭连接。
+     * 与登录阶段的 {@code Kick(0x00)} 不同，游戏阶段必须使用 play 状态的 Disconnect 数据包，
+     * 否则客户端会直接显示「连接中断」而不是自定义消息。
+     */
+    public void disconnect(UserConnection user, String message) {
+        if (user == null || user.getChannel() == null || !user.getChannel().isActive()) {
+            return;
+        }
         int protocolVersion = user.getProtocolVersion();
 
         ByteBuf buf = Unpooled.buffer();
-        DefinedPacket.writeVarInt(kickPacketId(protocolVersion), buf);
-        JSONObject component = ChatComponentUtils.component(message);
+        DefinedPacket.writeVarInt(ProtocolConstants.disconnectPacketId(protocolVersion), buf);
+        JSONObject component = ChatComponentUtils.component(message == null ? "" : message);
         if (protocolVersion >= 765) {                                  // 1.20.3+ NBT component
             ChatComponentUtils.writeNbtComponent(buf, component);
         } else {
             DefinedPacket.writeString(component.toJSONString(), buf);
         }
 
-        log.info("Kicking {}: {}", user.getUsername(), reason);
         // Flush the disconnect screen first, then tear the connection down.
         user.getChannel().writeAndFlush(buf).addListener(future -> user.close());
+    }
+
+    /**
+     * 与 {@link #disconnect(UserConnection, String)} 相同，但接收的是<b>已构建好的 JSON 聊天组件</b>
+     * ——后端在踢出数据包里给出的原因本身就是 JSON 组件。JSON 解析不成组件对象时按普通文本处理。
+     */
+    public void disconnectJson(UserConnection user, String jsonComponent) {
+        if (user == null || user.getChannel() == null || !user.getChannel().isActive()) {
+            return;
+        }
+        int protocolVersion = user.getProtocolVersion();
+
+        ByteBuf buf = Unpooled.buffer();
+        DefinedPacket.writeVarInt(ProtocolConstants.disconnectPacketId(protocolVersion), buf);
+        if (protocolVersion >= 765) {                                  // 1.20.3+ NBT component
+            ChatComponentUtils.writeNbtComponent(buf, parseComponent(jsonComponent));
+        } else {
+            DefinedPacket.writeString(jsonComponent == null ? "" : jsonComponent, buf);
+        }
+
+        // Flush the disconnect screen first, then tear the connection down.
+        user.getChannel().writeAndFlush(buf).addListener(future -> user.close());
+    }
+
+    /** 把后端给出的 JSON 组件解析成组件对象；不是组件对象时退回普通文本。 */
+    private static JSONObject parseComponent(String jsonComponent) {
+        if (jsonComponent != null) {
+            try {
+                JSONObject component = JSON.parseObject(jsonComponent);
+                if (component != null) {
+                    return component;
+                }
+            } catch (Exception ignored) {
+                // Not a component object (e.g. a bare JSON string): fall through to plain text.
+            }
+        }
+        return ChatComponentUtils.component(jsonComponent == null ? "" : jsonComponent);
     }
 
     /** Kicks every online player with the configured kick screen. */
@@ -76,35 +128,19 @@ public class PlayerKickService {
     }
 
     /**
-     * Builds the kick screen text from the configured {@code banned_message_base} template:
+     * Builds the kick screen text from the configured {@code kick_message_base} template:
      * line breaks ({@code \n} or {@code |}), {@code &} → {@code §} colour codes and the
-     * {@code $playerName}/{@code $reason}/{@code $idRandom} placeholders.
+     * {@code $playerName}/{@code $reason}/{@code $kickId} placeholders.
      */
-    private String buildMessage(String playerName, String reason,String kid) {
+    private String buildMessage(String playerName, String reason, String kid) {
         KickMessageConfig config = properties.getKickMessageConfig();
-        String template = (config.isEnabled() && config.getBannedMessageBase() != null)
-                ? config.getBannedMessageBase()
-                : "&cYou have been kicked from the proxy!\n&7Reason: &f" + reason;
-
-        StringBuilder message = new StringBuilder();
-        for (String line : template.split("[\n|]")) {
-            String trimmed = line.trim();
-            if (trimmed.isEmpty()) {
-                continue;
-            }
-            if (!message.isEmpty()) {
-                message.append('\n');
-            }
-            message.append(trimmed);
-        }
-
-        return message.toString()
-                .replace("\\n&b&l»&f&lExpireTime : &c&l$ExpireTime","")
-                .replace("UUID:","Player:")
-                .replace('&', '\u00A7')
-                .replace("$playerUID", playerName)
-                .replace("$reason", reason)
-                .replace("$idRandom", kid);
+        String template = (config.isEnabled() && config.getKickMessageBase() != null)
+                ? config.getKickMessageBase()
+                : "&cYou have been kicked from the proxy!\n&7Reason: &f$reason";
+        return DisconnectMessageRenderer.render(template, Map.of(
+                "$playerName", playerName == null ? "" : playerName,
+                "$reason", reason == null ? "" : reason,
+                "$kickId", kid == null ? "" : kid));
     }
 
     private String randomId() {
@@ -115,56 +151,4 @@ public class PlayerKickService {
         return id.toString();
     }
 
-    /**
-     * 按协议版本区分的客户端游戏阶段断开连接数据包 ID；
-     * 未明确列出条目的版本会继承相邻的较低版本）。
-     */
-    private static int kickPacketId(int protocolVersion) {
-        if (protocolVersion >= 773) {
-            return 0x20;                                               // 1.21.9+
-        }
-        if (protocolVersion >= 770) {
-            return 0x1C;                                               // 1.21.5+
-        }
-        if (protocolVersion >= 766) {
-            return 0x1D;                                               // 1.20.5+
-        }
-        if (protocolVersion >= 764) {
-            return 0x1B;                                               // 1.20.2-1.20.4
-        }
-        if (protocolVersion >= 762) {
-            return 0x1A;                                               // 1.19.4-1.20.1
-        }
-        if (protocolVersion >= 761) {
-            return 0x17;                                               // 1.19.3
-        }
-        if (protocolVersion >= 760) {
-            return 0x19;                                               // 1.19.1-1.19.2
-        }
-        if (protocolVersion >= 759) {
-            return 0x17;                                               // 1.19
-        }
-        if (protocolVersion >= 755) {
-            return 0x1A;                                               // 1.17-1.18.2
-        }
-        if (protocolVersion >= 751) {
-            return 0x19;                                               // 1.16.2-1.16.5
-        }
-        if (protocolVersion >= 735) {
-            return 0x1A;                                               // 1.16-1.16.1
-        }
-        if (protocolVersion >= 573) {
-            return 0x1B;                                               // 1.15-1.15.2
-        }
-        if (protocolVersion >= 477) {
-            return 0x1A;                                               // 1.14-1.14.4
-        }
-        if (protocolVersion >= 393) {
-            return 0x1B;                                               // 1.13-1.13.2
-        }
-        if (protocolVersion >= 107) {
-            return 0x1A;                                               // 1.9-1.12.2
-        }
-        return 0x40;                                                   // 1.8-1.8.9
-    }
 }

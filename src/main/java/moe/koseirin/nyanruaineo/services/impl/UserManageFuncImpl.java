@@ -2,6 +2,7 @@ package moe.koseirin.nyanruaineo.services.impl;
 
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
+import moe.koseirin.nyanruaineo.Minecraft.service.BanKickService;
 import moe.koseirin.nyanruaineo.dto.UserEditDTO;
 import moe.koseirin.nyanruaineo.entity.Accounts;
 import moe.koseirin.nyanruaineo.entity.BanUserList;
@@ -44,16 +45,18 @@ public class UserManageFuncImpl {
     private final UserDevicesRepository userDevicesRepository;
     private final YggdrasilRepository yggdrasilRepository;
     private final PermissionService permissionService;
+    private final BanKickService banKickService;
     private final Respond respond;
     private final utilset utilset;
 
-    public UserManageFuncImpl(AccountsRepository accountsRepository, NyanIDuserRepository nyanIDuserRepository, BanUserRepository banUserRepository, UserDevicesRepository userDevicesRepository, YggdrasilRepository yggdrasilRepository, PermissionService permissionService, Respond respond, utilset utilset) {
+    public UserManageFuncImpl(AccountsRepository accountsRepository, NyanIDuserRepository nyanIDuserRepository, BanUserRepository banUserRepository, UserDevicesRepository userDevicesRepository, YggdrasilRepository yggdrasilRepository, PermissionService permissionService, BanKickService banKickService, Respond respond, utilset utilset) {
         this.accountsRepository = accountsRepository;
         this.nyanIDuserRepository = nyanIDuserRepository;
         this.banUserRepository = banUserRepository;
         this.userDevicesRepository = userDevicesRepository;
         this.yggdrasilRepository = yggdrasilRepository;
         this.permissionService = permissionService;
+        this.banKickService = banKickService;
         this.respond = respond;
         this.utilset = utilset;
     }
@@ -156,7 +159,9 @@ public class UserManageFuncImpl {
         ban.setBannedBy(operatorUid == null || operatorUid.isBlank() ? "Admin" : operatorUid);
         ban.setExpireTime(expireTime);
         BanUserList saved = banUserRepository.save(ban);
-        return respond.respond(MediaType.APPLICATION_JSON, 200, "message", "Banned", "banId", saved.getBanID(), "timestamp", LocalDateTime.now());
+        int kicked = banKickService.kickOnlinePlayers(saved);
+        return respond.respond(MediaType.APPLICATION_JSON, 200,
+                "message", "Banned", "banId", saved.getBanID(), "kicked", kicked, "timestamp", LocalDateTime.now());
     }
 
     /** 解封账号的全部生效封禁。 */

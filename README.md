@@ -24,6 +24,7 @@ NyanProxy（`moe.koseirin.nyanruaineo`）是一个基于 Spring Boot 的一体�
 | [10-QQ机器人](./doc/10-QQ机器人.md)                                 | QQ 机器人（Qbot） |
 | [11-AI服务](./doc/11-AI服务.md)                                     | AI 聊天服务（AIServices） |
 | [12-用户管理与工单系统](./doc/12-用户管理与工单系统.md)             | V3 用户管理 + 工单（Ticket）系统 |
+| [14-v7后端服务器接口](./doc/14-v7后端服务器接口.md)                 | 子服务器插件对接代理的 v7 接口（封禁/踢出/广播等）与凭据管理 |
 
 ## 快速开始
 

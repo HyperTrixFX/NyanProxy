@@ -1,4 +1,4 @@
-package moe.koseirin.nyanruaineo.server.YggdrasilServer.Authserver.Json;
+package moe.koseirin.nyanruaineo.dto.yggdrasil;
 
 /*
  * @author KoseiRin_
@@ -8,6 +8,7 @@ package moe.koseirin.nyanruaineo.server.YggdrasilServer.Authserver.Json;
 import lombok.Getter;
 import lombok.Setter;
 
+/** Yggdrasil 属性（{@code name}/{@code value}/{@code signature}）。 */
 @Getter
 @Setter
 public class Property {
@@ -16,13 +17,12 @@ public class Property {
     private String value;
     private String signature;
 
-    public Property() {}
+    public Property() {
+    }
 
     public Property(String name, String value, String signature) {
         this.name = name;
         this.value = value;
         this.signature = signature;
     }
-
-
 }

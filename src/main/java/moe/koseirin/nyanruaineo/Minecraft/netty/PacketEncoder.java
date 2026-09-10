@@ -23,6 +23,8 @@ import java.util.List;
  */
 public class PacketEncoder extends MessageToMessageEncoder<Object> {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PacketEncoder.class);
+
     @Setter
     @Getter
     private Protocol protocol;
@@ -51,9 +53,8 @@ public class PacketEncoder extends MessageToMessageEncoder<Object> {
             if (next != null) {
                 Protocol from = protocol;
                 protocol = next;
-                if (org.slf4j.LoggerFactory.getLogger(PacketEncoder.class).isDebugEnabled()) {
-                    org.slf4j.LoggerFactory.getLogger(PacketEncoder.class).debug(
-                            "{} encode {} -> {} after {} (v{})", direction, from, next,
+                if (log.isDebugEnabled()) {
+                    log.debug("{} encode {} -> {} after {} (v{})", direction, from, next,
                             packet.getClass().getSimpleName(), protocolVersion);
                 }
             }

@@ -33,21 +33,10 @@ import moe.koseirin.nyanruaineo.Minecraft.netty.PacketEncoder;
 import moe.koseirin.nyanruaineo.Minecraft.netty.PipelineUtils;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.Protocol;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.ProtocolConstants;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.EncryptionRequest;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.EntityStatus;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.GameState;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.Handshake;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.JoinGame;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.Kick;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.LoginRequest;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.LoginSuccess;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.PluginMessage;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.SetCompression;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.StartConfiguration;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.TabListHeaderFooter;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.ViewDistance;
+import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.*;
 import moe.koseirin.nyanruaineo.Minecraft.config.cfg.BackendServer;
 import moe.koseirin.nyanruaineo.Minecraft.service.PlayerStateService;
+import moe.koseirin.nyanruaineo.Minecraft.util.LogThrottle;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -102,6 +91,11 @@ public class ServerConnector {
         int port = backend.getPort();
         log.debug("{}: connecting to backend {} ({}:{})", user.getUsername(), backend.getName(), host, port);
 
+        // 后端连接认证：首次连接时先把该玩家标记为「正在连接」，后端插件可在登录时通过 v7 查询到。
+        if (!serverSwitch) {
+            proxy.markConnecting(user.getUuid());
+        }
+
         Bootstrap bootstrap = new Bootstrap()
                 .group(proxy.getWorkerGroup())
                 .channel(NioSocketChannel.class)
@@ -114,10 +108,15 @@ public class ServerConnector {
                         int generation = user.getServerGeneration();
                         ch.closeFuture().addListener(future -> {
                             log.debug("Backend channel closed for {}", user.getUsername());
-                            // Only tear the client down when this backend is still the current one
-                            // (a server switch bumps the generation).
+                            // Only act when this backend is still the current one (a server switch
+                            // bumps the generation, so the old backend's close is ignored).
                             if (user.getServerGeneration() == generation && user.getChannel().isActive()) {
-                                user.getChannel().close();
+                                // The current backend dropped the player: pull them back to the
+                                // lobby — or kick them when there is nowhere to go — instead of
+                                // silently closing the client.
+                                if (!proxy.getPlayerTransferService().fallbackToLobby(user, ch)) {
+                                    user.getChannel().close();
+                                }
                             }
                         });
                     }
@@ -125,7 +124,12 @@ public class ServerConnector {
 
         bootstrap.connect(host, port).addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
-                log.error("Could not connect to backend {}:{} for {},cause: {}", host, port, user.getUsername(), future.cause().getMessage());
+                // 限流：后端子服挂掉时，每个玩家的每次重连都会走到这里，很容易刷屏。
+                String gate = LogThrottle.acquire("backend-connect-failed", 10_000L);
+                if (gate != null) {
+                    log.error("Could not connect to backend {}:{} for {},cause: {}{}",
+                            host, port, user.getUsername(), future.cause().getMessage(), gate);
+                }
                 disconnectClient("{\"text\":\"代号325空降失败了喵～因为系统找不到着陆点喵～\"}");
                 return;
             }
@@ -177,8 +181,10 @@ public class ServerConnector {
             // Still in the LOGIN phase: a client-bound Kick (0x00) can be written directly.
             user.getChannel().writeAndFlush(new Kick(reason)).addListener(ChannelFutureListener.CLOSE);
         } else {
-            // Already in the play phase after a failed switch: just close the connection.
-            user.close();
+            // Already in the play phase after a failed switch / lobby fallback: send the play-state
+            // Disconnect packet so the player sees a real kick screen with the reason instead of a
+            // silent "connection lost". The reason is a JSON chat component in both paths.
+            proxy.getPlayerKickService().disconnectJson(user, reason);
         }
     }
 
@@ -421,11 +427,12 @@ public class ServerConnector {
         private void onJoinGame(JoinGame login) {
             int version = user.getProtocolVersion();
 
-            playerState.setClientEntityId(user, login.getEntityId());
-            playerState.setServerEntityId(user, login.getEntityId());
-
-            // First connection (any version) or 1.16+ switch: the JoinGame is sent directly.
+            // First connection (any version) or 1.16+ switch: the JoinGame is sent directly, so the
+            // client re-learns its own entity id from it — both ids become the backend's id
+            // (BungeeCord handleLogin first-connection/1.16+ branch).
             if (!serverSwitch || version >= 735) {
+                playerState.setClientEntityId(user, login.getEntityId());
+                playerState.setServerEntityId(user, login.getEntityId());
                 if (!serverSwitch) {
                     // The front-end already switched to GAME and installed the bridge when Login
                     // Success was sent (see onLoginSuccess); resume reading and register the
@@ -450,7 +457,9 @@ public class ServerConnector {
                 }
                 playerState.setDimension(user, login.getDimension());
             } else {
-                // Pre-1.16 switch: the legacy respawn dance (no JoinGame forwarded).
+                // Pre-1.16 switch: the legacy respawn dance (no JoinGame forwarded). The client
+                // never learns a new entity id, so clientEntityId stays stable while only the
+                // backend-side id is updated below (BungeeCord handleLogin pre-1.16 branch).
                 playerState.clearServerState(user, user::sendPacket);
                 proxy.getTabListService().resetTabList(user);
                 user.sendPacket(new EntityStatus(playerState.getClientEntityId(user),
@@ -482,6 +491,14 @@ public class ServerConnector {
                 PluginMessage brandMessage = user.getBrandMessage();
                 if (brandMessage != null) {
                     server.sendPacket(brandMessage);
+                }
+                // Replay the client's settings (skinParts → cape + second skin layer) so a switched
+                // backend broadcasts the correct skin layers instead of all-off (BungeeCord
+                // ServerConnector parity: ch.write(con.getSettings()) for pre-1.20.2).
+                ClientSettings clientSettings =
+                        user.getClientSettings();
+                if (clientSettings != null) {
+                    server.sendPacket(clientSettings);
                 }
             }
             Set<String> registeredChannels = user.getRegisteredChannels();
@@ -533,7 +550,11 @@ public class ServerConnector {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            log.warn("Backend login error for {},[{}]", user.getUsername(), cause.getMessage());
+            // 限流：后端登录阶段异常同样是「每个玩家一条」，集中重连时会刷屏。
+            String gate = LogThrottle.acquire("backend-login-error", 10_000L);
+            if (gate != null) {
+                log.warn("Backend login error for {},[{}]{}", user.getUsername(), cause.getMessage(), gate);
+            }
             user.close();
         }
     }

@@ -120,6 +120,20 @@ public enum Protocol {
         GAME.toServer.register(338, 404, 0x02, Chat.class, Chat::new);       // 1.12.1-1.13.2
         GAME.toServer.register(477, 758, 0x03, Chat.class, Chat::new);       // 1.14-1.18.2
 
+        // ClientSettings (serverbound "Client Settings", 1.8-1.20.1): the last field is skinParts
+        // (cape + second skin layer). Tracked so a server switch can replay it to the new backend —
+        // BungeeCord parity (UpstreamBridge.handle(ClientSettings) -> con.setSettings). The 1.20.2+
+        // configuration-phase variant is registered in the CONFIGURATION state below.
+        GAME.toServer.register(47, 106, 0x15, ClientSettings.class, ClientSettings::new);   // 1.8-1.8.9
+        GAME.toServer.register(107, 334, 0x04, ClientSettings.class, ClientSettings::new);  // 1.9-1.11.2
+        GAME.toServer.register(335, 337, 0x05, ClientSettings.class, ClientSettings::new);  // 1.12
+        GAME.toServer.register(338, 476, 0x04, ClientSettings.class, ClientSettings::new);  // 1.12.1-1.13.2
+        GAME.toServer.register(477, 758, 0x05, ClientSettings.class, ClientSettings::new);  // 1.14-1.18.2
+        GAME.toServer.register(759, 759, 0x07, ClientSettings.class, ClientSettings::new);  // 1.19
+        GAME.toServer.register(760, 760, 0x08, ClientSettings.class, ClientSettings::new);  // 1.19.1-1.19.2
+        GAME.toServer.register(761, 761, 0x07, ClientSettings.class, ClientSettings::new);  // 1.19.3
+        GAME.toServer.register(762, 763, 0x08, ClientSettings.class, ClientSettings::new);  // 1.19.4-1.20.1
+
         GAME.toServer.register(759, 759, 0x03, ClientCommand.class, ClientCommand::new);   // 1.19
         GAME.toServer.register(760, 765, 0x04, ClientCommand.class, ClientCommand::new);   // 1.19.1-1.20.4
         GAME.toServer.register(766, 767, 0x05, ClientCommand.class, ClientCommand::new);   // 1.20.5-1.21.1

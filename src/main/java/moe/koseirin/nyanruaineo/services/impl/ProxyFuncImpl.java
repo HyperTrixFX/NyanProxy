@@ -6,6 +6,7 @@ import com.alibaba.fastjson2.JSONObject;
 import lombok.RequiredArgsConstructor;
 import moe.koseirin.nyanruaineo.Minecraft.MinecraftProxy;
 import moe.koseirin.nyanruaineo.Minecraft.config.cfg.BackendServer;
+import moe.koseirin.nyanruaineo.Minecraft.config.cfg.BanMessageConfig;
 import moe.koseirin.nyanruaineo.Minecraft.config.cfg.FirewallConfig;
 import moe.koseirin.nyanruaineo.Minecraft.config.cfg.KickMessageConfig;
 import moe.koseirin.nyanruaineo.Minecraft.config.cfg.MotdConfig;
@@ -71,11 +72,12 @@ public class ProxyFuncImpl {
     private static final String KEY_TABLIST = "proxy.tablist";
     private static final String KEY_FIREWALL = "proxy.firewall";
     private static final String KEY_KICK_MESSAGE = "proxy.kick-message";
+    private static final String KEY_BAN_MESSAGE = "proxy.ban-message";
 
     private static final List<String> CONFIG_KEYS = List.of(
             KEY_PORT, KEY_MAX_PLAYERS, KEY_NAME,
             KEY_ONLINE_MODE, KEY_IP_FORWARD, KEY_FORGE_SUPPORT,
-            KEY_MOTD, KEY_TABLIST, KEY_FIREWALL, KEY_KICK_MESSAGE);
+            KEY_MOTD, KEY_TABLIST, KEY_FIREWALL, KEY_KICK_MESSAGE, KEY_BAN_MESSAGE);
 
     private static final int MAX_CONFIG_VALUE_LENGTH = 800;
 
@@ -246,7 +248,7 @@ public class ProxyFuncImpl {
             case KEY_PORT, KEY_MAX_PLAYERS -> "int";
             case KEY_ONLINE_MODE, KEY_IP_FORWARD, KEY_FORGE_SUPPORT -> "boolean";
             case KEY_NAME -> "string";
-            case KEY_MOTD, KEY_TABLIST, KEY_FIREWALL, KEY_KICK_MESSAGE -> "json";
+            case KEY_MOTD, KEY_TABLIST, KEY_FIREWALL, KEY_KICK_MESSAGE, KEY_BAN_MESSAGE -> "json";
             default -> "string";
         };
     }
@@ -268,6 +270,7 @@ public class ProxyFuncImpl {
             case KEY_TABLIST -> validateJson(value, TabListConfig.class);
             case KEY_FIREWALL -> validateJson(value, FirewallConfig.class);
             case KEY_KICK_MESSAGE -> validateJson(value, KickMessageConfig.class);
+            case KEY_BAN_MESSAGE -> validateJson(value, BanMessageConfig.class);
             default -> "unknown key";
         };
     }
