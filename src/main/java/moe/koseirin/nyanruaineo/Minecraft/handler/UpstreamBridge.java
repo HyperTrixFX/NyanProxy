@@ -7,6 +7,7 @@ package moe.koseirin.nyanruaineo.Minecraft.handler;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.util.ReferenceCountUtil;
@@ -25,15 +26,7 @@ import moe.koseirin.nyanruaineo.Minecraft.protocol.DefinedPacket;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.EntityRewrite;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.Protocol;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.ProtocolConstants;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.Chat;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.ClientChat;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.ClientCommand;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.ClientSettings;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.LoginAcknowledged;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.PluginMessage;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.StartConfiguration;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.TabCompleteRequest;
-import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.UnsignedClientCommand;
+import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.*;
 
 /**
  * Relays client-to-server traffic to the backend, mirroring BungeeCord's {@code UpstreamBridge}.
@@ -175,9 +168,19 @@ public class UpstreamBridge extends ChannelInboundHandlerAdapter {
         // (Use Entity / Entity Action) after a pre-1.16 switch.
         EntityRewrite entityRewrite = EntityRewrite.forVersion(user.getProtocolVersion());
         if (entityRewrite != null && msg instanceof ByteBuf raw && raw.isReadable()) {
-            entityRewrite.rewriteServerbound(raw,
-                    proxy.getPlayerStateService().getClientEntityId(user),
-                    proxy.getPlayerStateService().getServerEntityId(user));
+            int clientEntityId = proxy.getPlayerStateService().getClientEntityId(user);
+            int serverEntityId = proxy.getPlayerStateService().getServerEntityId(user);
+            if (clientEntityId != serverEntityId && entityRewrite.isRewritableServerbound(raw)) {
+                // The frame is a fixed-capacity slice / array wrapper, but a VarInt entity id gets
+                // longer when the two ids have different VarInt lengths (e.g. 100 -> 300), so the
+                // rewrite needs a buffer it can grow — otherwise it overflows and kicks the player.
+                ByteBuf target = EntityRewrite.growable(raw);
+                if (target != raw) {
+                    raw.release();
+                    msg = target;
+                }
+                entityRewrite.rewriteServerbound(target, clientEntityId, serverEntityId);
+            }
         }
 
         server.getChannel().writeAndFlush(msg, server.getChannel().voidPromise());
@@ -347,6 +350,9 @@ public class UpstreamBridge extends ChannelInboundHandlerAdapter {
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         log.warn("UpstreamBridge error for {}: {}", user.getUsername(), cause.getMessage());
+        ctx.writeAndFlush(new Kick(
+                        "{\"text\":\""+cause.getMessage()+"\",\"color\":\"red\"}"))
+                .addListener(ChannelFutureListener.CLOSE);
         ctx.close();
     }
 }

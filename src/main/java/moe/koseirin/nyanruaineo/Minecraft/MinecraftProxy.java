@@ -70,6 +70,17 @@ public class MinecraftProxy {
 
     private final PlayerQueryService playerQueryService;
 
+    /**
+     * 后端把玩家连接关闭时的兜底：强制送回大厅，进不去则踢出。
+     * 该服务自身依赖 MinecraftProxy，因此用 {@code @Lazy} 打破构造环。
+     */
+    @Getter
+    private final PlayerTransferService playerTransferService;
+
+    /** 以配置好的踢出界面把玩家踢出代理端（游戏阶段的 Disconnect 数据包）。 */
+    @Getter
+    private final PlayerKickService playerKickService;
+
     @Value("${NyanidSetting.EnableProxy:false}")
     private boolean enableProxy;
 
@@ -104,7 +115,12 @@ public class MinecraftProxy {
                           FirewallService firewallService,
                           PermissionService permissionService,
                           ProxyBanService proxyBanService,
-                          @Lazy PlayerQueryService playerQueryService) {
+                          @Lazy PlayerQueryService playerQueryService,
+                          // @Lazy breaks the construction cycle: both fallback services depend back
+                          // on MinecraftProxy (they are reached from the Netty handlers via
+                          // proxy.getPlayerTransferService() / proxy.getPlayerKickService()).
+                          @Lazy PlayerTransferService playerTransferService,
+                          @Lazy PlayerKickService playerKickService) {
         this.properties = properties;
         this.playerAuthService = playerAuthService;
         this.pingResponseProvider = pingResponseProvider;
@@ -119,6 +135,8 @@ public class MinecraftProxy {
         this.permissionService = permissionService;
         this.proxyBanService = proxyBanService;
         this.playerQueryService = playerQueryService;
+        this.playerTransferService = playerTransferService;
+        this.playerKickService = playerKickService;
     }
 
     @PostConstruct

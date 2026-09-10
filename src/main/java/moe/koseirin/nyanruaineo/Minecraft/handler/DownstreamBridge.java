@@ -35,6 +35,7 @@ import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.ScoreboardScore;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.TabListHeaderFooter;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.Team;
 import moe.koseirin.nyanruaineo.Minecraft.service.PlayerStateService;
+import moe.koseirin.nyanruaineo.Minecraft.util.ChatComponentUtils;
 
 /**
  * 负责把后端服务器发来的数据包转发给客户端。
@@ -275,6 +276,22 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
             }
         }
 
+        // A graceful backend shutdown (`/stop`) does not just drop the connection: Spigot first
+        // sends every player a play-state Disconnect carrying `bukkit.yml`'s
+        // `settings.shutdown-message` (default "Server closed"), and the CLIENT then disconnects
+        // itself — so the "backend connection closed" fallback would never run. Intercept that one
+        // packet and route it through the same lobby fallback. Deliberate kicks (plugins, admins)
+        // carry other reasons and are forwarded verbatim, so the player still sees their message.
+        if (msg instanceof ByteBuf raw && raw.isReadable()
+                && isBackendShutdownDisconnect(raw, user.getProtocolVersion())) {
+            if (proxy.getPlayerTransferService().fallbackToLobby(user, server.getChannel())) {
+                raw.release();
+                return;
+            }
+            // No fallback was available (no lobby configured, or the lobby is the server that just
+            // shut down): fall through and forward the backend's own disconnect screen.
+        }
+
         // Entity id rewrite (BungeeCord DownstreamBridge parity): on a pre-1.16 server switch the
         // client never got a new JoinGame, so it keeps its original entity id while the backend
         // assigned a fresh one. Translate the backend id back to the client's stable id in every
@@ -282,12 +299,23 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
         EntityRewrite entityRewrite = EntityRewrite.forVersion(user.getProtocolVersion());
         if (entityRewrite != null) {
             PlayerStateService playerState = proxy.getPlayerStateService();
+            int serverEntityId = playerState.getServerEntityId(user);
+            int clientEntityId = playerState.getClientEntityId(user);
             if (msg instanceof ByteBuf raw && raw.isReadable()) {
-                entityRewrite.rewriteClientbound(raw, playerState.getServerEntityId(user),
-                        playerState.getClientEntityId(user));
+                // Only a switched connection has two different ids, and only entity-addressed frames
+                // can change size — everything else (chunk data!) must never be copied.
+                if (serverEntityId != clientEntityId && entityRewrite.isRewritableClientbound(raw)) {
+                    // The frame is a fixed-capacity slice / array wrapper, but a VarInt entity id
+                    // gets longer when the two ids have different VarInt lengths, so the rewrite
+                    // needs a buffer it can grow.
+                    ByteBuf target = EntityRewrite.growable(raw);
+                    if (target != raw) {
+                        raw.release();
+                        msg = target;
+                    }
+                    entityRewrite.rewriteClientbound(target, serverEntityId, clientEntityId);
+                }
             } else if (msg instanceof EntityStatus status) {
-                int serverEntityId = playerState.getServerEntityId(user);
-                int clientEntityId = playerState.getClientEntityId(user);
                 if (status.getEntityId() == serverEntityId) {
                     status.setEntityId(clientEntityId);
                 } else if (status.getEntityId() == clientEntityId) {
@@ -1043,10 +1071,42 @@ public class DownstreamBridge extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-        // Only tear the client down when this backend is still the current one (a server switch
-        // bumps the generation and a new backend takes over).
+        // Only act when this backend is still the current one (a server switch bumps the generation
+        // and a new backend takes over).
         if (user.getServerGeneration() == generation) {
-            user.close();
+            // The backend dropped the player: fall back to the lobby — or kick when there is
+            // nowhere to go. Idempotent: ServerConnector's closeFuture reports the same close, and
+            // whichever runs first owns the client.
+            if (!proxy.getPlayerTransferService().fallbackToLobby(user, server.getChannel())) {
+                user.close();
+            }
+        }
+    }
+
+    /**
+     * 判断这一帧是不是后端<b>正常关服</b>发出的游戏阶段 Disconnect。
+     * <p>
+     * Spigot 关服时对每个玩家发 {@code PlayerConnection.disconnect(settings.shutdown-message)}，
+     * 默认文案就是 "Server closed"；识别它才能把玩家送回大厅，而不是让客户端自己断开。
+     * 任何读取异常都按"不是关服包"处理——诊断永远不能影响转发。
+     * （包级可见，便于回归测试直接调用。）
+     */
+    static boolean isBackendShutdownDisconnect(ByteBuf frame, int protocolVersion) {
+        try {
+            ByteBuf body = frame.duplicate();
+            if (DefinedPacket.readVarInt(body) != ProtocolConstants.disconnectPacketId(protocolVersion)) {
+                return false;
+            }
+            String reason = protocolVersion >= ProtocolConstants.MINECRAFT_1_20_3
+                    ? ChatComponentUtils.readNbtComponent(body).toJSONString() // 1.20.3+ 匿名 NBT 组件
+                    : DefinedPacket.readString(body);                          // 之前是 JSON 字符串
+            String lower = reason == null ? "" : reason.toLowerCase(java.util.Locale.ROOT);
+            return lower.contains("server closed")
+                    || lower.contains("server_closed")
+                    || lower.contains("server_shutdown")
+                    || lower.contains("服务器已关闭");
+        } catch (Exception e) {
+            return false;
         }
     }
 

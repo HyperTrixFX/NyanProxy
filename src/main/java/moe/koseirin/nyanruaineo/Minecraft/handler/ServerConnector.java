@@ -107,10 +107,15 @@ public class ServerConnector {
                         int generation = user.getServerGeneration();
                         ch.closeFuture().addListener(future -> {
                             log.debug("Backend channel closed for {}", user.getUsername());
-                            // Only tear the client down when this backend is still the current one
-                            // (a server switch bumps the generation).
+                            // Only act when this backend is still the current one (a server switch
+                            // bumps the generation, so the old backend's close is ignored).
                             if (user.getServerGeneration() == generation && user.getChannel().isActive()) {
-                                user.getChannel().close();
+                                // The current backend dropped the player: pull them back to the
+                                // lobby — or kick them when there is nowhere to go — instead of
+                                // silently closing the client.
+                                if (!proxy.getPlayerTransferService().fallbackToLobby(user, ch)) {
+                                    user.getChannel().close();
+                                }
                             }
                         });
                     }
@@ -170,8 +175,10 @@ public class ServerConnector {
             // Still in the LOGIN phase: a client-bound Kick (0x00) can be written directly.
             user.getChannel().writeAndFlush(new Kick(reason)).addListener(ChannelFutureListener.CLOSE);
         } else {
-            // Already in the play phase after a failed switch: just close the connection.
-            user.close();
+            // Already in the play phase after a failed switch / lobby fallback: send the play-state
+            // Disconnect packet so the player sees a real kick screen with the reason instead of a
+            // silent "connection lost". The reason is a JSON chat component in both paths.
+            proxy.getPlayerKickService().disconnectJson(user, reason);
         }
     }
 

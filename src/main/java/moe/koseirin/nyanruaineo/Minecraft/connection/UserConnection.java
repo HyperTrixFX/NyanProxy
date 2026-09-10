@@ -67,6 +67,14 @@ public class UserConnection extends Connection {
     @Setter
     private volatile boolean switchingServer;
     /**
+     * 已经由"后端掉线兜底"处理过的那条后端通道。后端关闭会经由 {@code ServerConnector} 的
+     * closeFuture 与 {@code DownstreamBridge.channelInactive} 各通知一次，用通道本身当令牌，
+     * 保证只有第一个通知真正触发回退大厅 / 踢出，第二个直接跳过（否则会把刚开始的回退打断）。
+     * 新后端被采用后令牌自然失效（通道不同），所以后续掉线仍能再次兜底。
+     */
+    @Setter
+    private volatile Channel handledDropChannel;
+    /**
      * 记录 TabList ADD_PLAYER 数据包中的玩家名字，以便在拦截 TabList 前缀/后缀时，
      * 能够把 UPDATE_DISPLAY_NAME 条目还原成对应的玩家名。
      */

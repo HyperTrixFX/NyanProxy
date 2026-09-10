@@ -6,6 +6,7 @@ package moe.koseirin.nyanruaineo.Minecraft.protocol;
  */
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 
 /**
  * 代理玩家"自身实体 ID"的裸帧改写器。
@@ -30,6 +31,13 @@ public class EntityRewrite {
     private final boolean[] clientboundVarInts = new boolean[256];
     private final boolean[] serverboundInts = new boolean[256];
     private final boolean[] serverboundVarInts = new boolean[256];
+
+    /**
+     * 只由版本专属特例改写的包（Destroy Entities / Combat Event / Entity Sound Effect）。
+     * 它们不能进上面那几张通用表——否则通用逻辑会把它们的首字段（数量 / 事件类型）误当成实体 ID。
+     */
+    private final boolean[] clientboundSpecial = new boolean[256];
+    private final boolean[] serverboundSpecial = new boolean[256];
 
     private static final EntityRewrite REWRITE_1_8 = new EntityRewrite_1_8();
     private static final EntityRewrite REWRITE_1_9 = new EntityRewrite_1_9();
@@ -97,6 +105,59 @@ public class EntityRewrite {
         rewrite(packet, clientEntityId, serverEntityId, serverboundInts, serverboundVarInts);
     }
 
+    /**
+     * 登记一个"只由版本专属特例改写"的包（Destroy Entities / Combat Event / Entity Sound Effect），
+     * 让 {@link #isRewritableClientbound} 能识别它——这类包不能进通用重写表，否则首字段会被误改。
+     */
+    protected void markSpecial(int id, Direction direction) {
+        if (direction == Direction.TO_CLIENT) {
+            clientboundSpecial[id] = true;
+        } else {
+            serverboundSpecial[id] = true;
+        }
+    }
+
+    /** 这一帧是否携带代理需要改写的实体 ID（据此决定是否值得先换成可增长缓冲）。 */
+    public boolean isRewritableClientbound(ByteBuf packet) {
+        int packetId = peekPacketId(packet);
+        return packetId >= 0 && packetId < 256
+                && (clientboundInts[packetId] || clientboundVarInts[packetId] || clientboundSpecial[packetId]);
+    }
+
+    /** 与 {@link #isRewritableClientbound} 对应的客户端→服务端方向。 */
+    public boolean isRewritableServerbound(ByteBuf packet) {
+        int packetId = peekPacketId(packet);
+        return packetId >= 0 && packetId < 256
+                && (serverboundInts[packetId] || serverboundVarInts[packetId] || serverboundSpecial[packetId]);
+    }
+
+    private static int peekPacketId(ByteBuf packet) {
+        try {
+            return DefinedPacket.readVarInt(packet.duplicate());
+        } catch (RuntimeException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * 返回一个可以安全扩容的帧缓冲。帧解码器（{@code readRetainedSlice}）和解压器
+     * （{@code wrappedBuffer(byte[])}）产出的都是<b>固定容量</b>的缓冲：实体 ID 的 VarInt 在
+     * 客户端与后端长度不同时（例如 100 ↔ 300）改写会让整帧变长，原地改写就会抛
+     * {@code IndexOutOfBoundsException} 把玩家踢下线。这种帧必须先复制到可增长的堆缓冲上。
+     *
+     * @return 原缓冲（本身已可增长）或它的可增长副本；返回副本时调用方必须 release 原缓冲
+     */
+    public static ByteBuf growable(ByteBuf packet) {
+        if (packet.maxCapacity() > packet.capacity()) {
+            return packet;
+        }
+        ByteBuf out = Unpooled.buffer(packet.capacity() + 16);
+        out.writeBytes(packet, 0, packet.writerIndex());
+        out.writerIndex(packet.writerIndex());
+        out.readerIndex(packet.readerIndex());
+        return out;
+    }
+
     protected static void rewriteInt(ByteBuf packet, int oldId, int newId, int offset) {
         int readId = packet.getInt(offset);
         if (readId == oldId) {
@@ -135,6 +196,8 @@ public class EntityRewrite {
     private static final class EntityRewrite_1_8 extends EntityRewrite {
 
         EntityRewrite_1_8() {
+            markSpecial(0x13, Direction.TO_CLIENT); // Destroy Entities
+            markSpecial(0x42, Direction.TO_CLIENT); // Combat Event
             addRewrite(0x04, Direction.TO_CLIENT, true); // Entity Equipment
             addRewrite(0x0A, Direction.TO_CLIENT, true); // Use bed
             addRewrite(0x0B, Direction.TO_CLIENT, true); // Animation
@@ -197,6 +260,8 @@ public class EntityRewrite {
     private static final class EntityRewrite_1_9 extends EntityRewrite {
 
         EntityRewrite_1_9() {
+            markSpecial(0x30, Direction.TO_CLIENT); // Destroy Entities
+            markSpecial(0x2C, Direction.TO_CLIENT); // Combat Event
             addRewrite(0x00, Direction.TO_CLIENT, true); // Spawn Object
             addRewrite(0x01, Direction.TO_CLIENT, true); // Spawn Experience Orb
             addRewrite(0x03, Direction.TO_CLIENT, true); // Spawn Mob
@@ -267,6 +332,8 @@ public class EntityRewrite {
     private static final class EntityRewrite_1_9_4 extends EntityRewrite {
 
         EntityRewrite_1_9_4() {
+            markSpecial(0x30, Direction.TO_CLIENT); // Destroy Entities
+            markSpecial(0x2C, Direction.TO_CLIENT); // Combat Event
             addRewrite(0x00, Direction.TO_CLIENT, true); // Spawn Object
             addRewrite(0x01, Direction.TO_CLIENT, true); // Spawn Experience Orb
             addRewrite(0x03, Direction.TO_CLIENT, true); // Spawn Mob
@@ -337,6 +404,8 @@ public class EntityRewrite {
     private static final class EntityRewrite_1_12 extends EntityRewrite {
 
         EntityRewrite_1_12() {
+            markSpecial(0x31, Direction.TO_CLIENT); // Destroy Entities
+            markSpecial(0x2C, Direction.TO_CLIENT); // Combat Event
             addRewrite(0x00, Direction.TO_CLIENT, true); // Spawn Object
             addRewrite(0x01, Direction.TO_CLIENT, true); // Spawn Experience Orb
             addRewrite(0x03, Direction.TO_CLIENT, true); // Spawn Mob
@@ -407,6 +476,8 @@ public class EntityRewrite {
     private static final class EntityRewrite_1_12_1 extends EntityRewrite {
 
         EntityRewrite_1_12_1() {
+            markSpecial(0x32, Direction.TO_CLIENT); // Destroy Entities
+            markSpecial(0x2D, Direction.TO_CLIENT); // Combat Event
             addRewrite(0x00, Direction.TO_CLIENT, true); // Spawn Object
             addRewrite(0x01, Direction.TO_CLIENT, true); // Spawn Experience Orb
             addRewrite(0x03, Direction.TO_CLIENT, true); // Spawn Mob
@@ -477,6 +548,8 @@ public class EntityRewrite {
     private static final class EntityRewrite_1_13 extends EntityRewrite {
 
         EntityRewrite_1_13() {
+            markSpecial(0x35, Direction.TO_CLIENT); // Destroy Entities
+            markSpecial(0x2F, Direction.TO_CLIENT); // Combat Event
             addRewrite(0x00, Direction.TO_CLIENT, true); // Spawn Object
             addRewrite(0x01, Direction.TO_CLIENT, true); // Spawn Experience Orb
             addRewrite(0x03, Direction.TO_CLIENT, true); // Spawn Mob
@@ -547,6 +620,9 @@ public class EntityRewrite {
     private static final class EntityRewrite_1_14 extends EntityRewrite {
 
         EntityRewrite_1_14() {
+            markSpecial(0x37, Direction.TO_CLIENT); // Destroy Entities
+            markSpecial(0x32, Direction.TO_CLIENT); // Combat Event
+            markSpecial(0x50, Direction.TO_CLIENT); // Entity Sound Effect
             addRewrite(0x00, Direction.TO_CLIENT, true); // Spawn Object
             addRewrite(0x01, Direction.TO_CLIENT, true); // Spawn Experience Orb
             addRewrite(0x03, Direction.TO_CLIENT, true); // Spawn Mob
@@ -621,6 +697,9 @@ public class EntityRewrite {
     private static final class EntityRewrite_1_15 extends EntityRewrite {
 
         EntityRewrite_1_15() {
+            markSpecial(0x38, Direction.TO_CLIENT); // Destroy Entities
+            markSpecial(0x33, Direction.TO_CLIENT); // Combat Event
+            markSpecial(0x51, Direction.TO_CLIENT); // Entity Sound Effect
             addRewrite(0x00, Direction.TO_CLIENT, true); // Spawn Object
             addRewrite(0x01, Direction.TO_CLIENT, true); // Spawn Experience Orb
             addRewrite(0x03, Direction.TO_CLIENT, true); // Spawn Mob
