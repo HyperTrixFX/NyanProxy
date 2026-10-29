@@ -180,7 +180,7 @@ public class MinecraftProxy {
                 });
 
         serverFuture = bootstrap.bind(properties.getPort()).sync();
-        log.info("Minecraft proxy started on port {}", properties.getPort());
+        log.info("Minecraft proxy started on port {},{}", properties.getPort());
     }
 
     @PreDestroy

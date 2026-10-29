@@ -16,4 +16,9 @@ public interface OAuthAppRepository extends JpaRepository<OAuthApp, Integer>, Se
     @Query(value = "SELECT COUNT(*) AS nums FROM OAuthApp where IsActive = true ")
     int GetAllApplication();
 
+
+
+
+
+
 }

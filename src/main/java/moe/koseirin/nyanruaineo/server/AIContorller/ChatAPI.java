@@ -31,7 +31,8 @@ public class ChatAPI {
 
     @PostMapping("chat")
     public ResponseEntity<?> chat(@RequestBody AIChatRequestDTO dto, HttpServletRequest request){
-        if (enable){
+        //TODO AI CHAT(webapi)
+        if (false){
             return ResponseEntity.ok(aiServices.chat(request.getSession().getId(),dto.getMessage(),"null"));
         }else return ResponseEntity.status(204).build();
 

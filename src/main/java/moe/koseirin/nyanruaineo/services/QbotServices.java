@@ -1,6 +1,5 @@
 package moe.koseirin.nyanruaineo.services;
 
-import com.alibaba.fastjson2.JSONObject;
 import io.github.kloping.qqbot.Starter;
 import io.github.kloping.qqbot.api.Intents;
 import io.github.kloping.qqbot.api.v2.FriendMessageEvent;
@@ -31,45 +30,32 @@ public class QbotServices {
     @Value("${NyanidSetting.Qbot.secret}")
     private String secret;
 
-    private final AIServices aiServices;
     private final EventBus eventBus;
 
-    public QbotServices(AIServices aiServices, EventBus eventBus) {
-        this.aiServices = aiServices;
+    public QbotServices(EventBus eventBus) {
         this.eventBus = eventBus;
     }
 
     @PostConstruct
     public void initQbot() {
-        if(IsEnable){
-        Starter starter = new Starter(appid, secret);
-        starter.getConfig().setCode(Intents.PUBLIC_INTENTS.and(Intents.GROUP_INTENTS));
-        starter.run();
-        starter.registerListenerHost(new ListenerHost() {
+        if (IsEnable) {
+            Starter starter = new Starter(appid, secret);
+            starter.getConfig().setCode(Intents.PUBLIC_INTENTS.and(Intents.GROUP_INTENTS));
+            starter.run();
+            starter.registerListenerHost(new ListenerHost() {
 
-            @EventReceiver
-            public void onFriendMessage(FriendMessageEvent event) {
-                eventBus.postAsync(new QbotFriendMessageReceivedEvent(event));
-//                JSONObject msg = JSONObject.parseObject(event.getMetadata().toJSONString());
-//                event.send(aiServices.chat(msg.getJSONObject("author").getString("union_openid"), msg.getString("content"),"null"));
-//                log.warn(msg.getString("content"));
-            }
+                @EventReceiver
+                public void onFriendMessage(FriendMessageEvent event) {
+                    eventBus.postAsync(new QbotFriendMessageReceivedEvent(event));
+                }
 
-            @EventReceiver
-            public void onGroupMessage(GroupMessageEvent event) {
-                eventBus.postAsync(new QbotGroupMessageReceivedEvent(event));
-//                JSONObject msg = JSONObject.parseObject(event.getMetadata().toJSONString());
-//                event.send(aiServices.chat(msg.getJSONObject("author").getString("union_openid"), msg.getString("content"),msg.getJSONObject("author").getString("username")));
-//                log.warn(msg.getString("content"));
-            }
-        });
-    }else log.warn("Qbot已在配置文件中被关闭。");
-
-
+                @EventReceiver
+                public void onGroupMessage(GroupMessageEvent event) {
+                    eventBus.postAsync(new QbotGroupMessageReceivedEvent(event));
+                }
+            });
+        } else {
+            log.warn("Qbot已在配置文件中被关闭。");
+        }
     }
-
-
-
-
-
 }

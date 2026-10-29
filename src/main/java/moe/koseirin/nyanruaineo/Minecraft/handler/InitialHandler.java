@@ -35,7 +35,9 @@ import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.LoginSuccess;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.PingPacket;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.StatusRequest;
 import moe.koseirin.nyanruaineo.Minecraft.protocol.packet.StatusResponse;
+import moe.koseirin.nyanruaineo.Minecraft.util.RouteQuery;
 import moe.koseirin.nyanruaineo.entity.BanUserList;
+import org.jspecify.annotations.NonNull;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
@@ -86,37 +88,31 @@ public class InitialHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (msg instanceof Handshake handshake) {
-            handleHandshake(handshake);
-        } else if (msg instanceof StatusRequest) {
-            handleStatusRequest();
-        } else if (msg instanceof PingPacket ping) {
-            handlePing(ping);
-        } else if (msg instanceof ForgeHandshake forgeHandshake) {
-            handleForgeHandshake(forgeHandshake);
-        } else if (msg instanceof LoginRequest loginRequest) {
-            handleLoginRequest(loginRequest);
-        } else if (msg instanceof EncryptionResponse response) {
-            handleEncryptionResponse(response);
-        } else if (msg instanceof ByteBuf buf) {
-            // Unknown packet in a pre-play state: relay it to the backend if one is connected
-            // (login plugin messages, cookies, etc.), otherwise drop it.
-            ServerConnection backend = user == null ? null : user.getServer();
-            if (backend != null && backend.getChannel().isActive()) {
-                backend.getChannel().writeAndFlush(buf, backend.getChannel().voidPromise());
-            } else {
-                ReferenceCountUtil.release(msg);
+        switch (msg) {
+            case Handshake handshake -> handleHandshake(handshake, ctx);
+            case StatusRequest ignored -> handleStatusRequest();
+            case PingPacket ping -> handlePing(ping);
+            case ForgeHandshake forgeHandshake -> handleForgeHandshake(forgeHandshake);
+            case LoginRequest loginRequest -> handleLoginRequest(loginRequest,ctx);
+            case EncryptionResponse response -> handleEncryptionResponse(response,ctx);
+            case ByteBuf buf -> {
+                // Unknown packet in a pre-play state: relay it to the backend if one is connected
+                // (login plugin messages, cookies, etc.), otherwise drop it.
+                ServerConnection backend = user == null ? null : user.getServer();
+                if (backend != null && backend.getChannel().isActive()) {
+                    backend.getChannel().writeAndFlush(buf, backend.getChannel().voidPromise());
+                } else {
+                    ReferenceCountUtil.release(msg);
+                }
             }
-        } else {
-            ReferenceCountUtil.release(msg);
+            case null, default -> ReferenceCountUtil.release(msg);
         }
     }
 
-    private void handleHandshake(Handshake handshake) {
+    private void handleHandshake(@NonNull Handshake handshake, @NonNull ChannelHandlerContext ctx) {
         this.protocolVersion = handshake.getProtocolVersion();
         getPacketDecoder().setProtocolVersion(protocolVersion);
         getPacketEncoder().setProtocolVersion(protocolVersion);
-
         // FML 1.8+ appends a "\0FML\0" token (and possibly other NUL-delimited data) to the host.
         // Strip it for routing, and remember it so it can be restored on the backend handshake.
         String host = handshake.getHost();
@@ -136,6 +132,11 @@ public class InitialHandler extends ChannelInboundHandlerAdapter {
             setProtocol(Protocol.STATUS);
         } else if (handshake.getRequestedProtocol() == 2 || handshake.getRequestedProtocol() == 3) {
             // 2 = login, 3 = transfer (1.20.5+) — both proceed through the login phase.
+            log.info("Host:{}",handshake.getHost());
+            RouteQuery.attach(ctx.channel(), handshake.getHost(), handshake.getPort());
+            String id = RouteQuery.get(ctx.channel(), "id");
+            //TODO 26.4 Stage1 : HandShake
+            log.info("id={}", id);
             setProtocol(Protocol.LOGIN);
         } else {
             channel.close();
@@ -176,7 +177,7 @@ public class InitialHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    private void handleLoginRequest(LoginRequest loginRequest) {
+    private void handleLoginRequest(LoginRequest loginRequest,@NonNull ChannelHandlerContext ctx) {
         // Firewall: rate-limit login attempts before any encryption/auth, so bots cannot hammer
         // the Yggdrasil/Mojang session server (the "Mojang session returned no profile" flood).
         if (!proxy.getFirewallService().tryLogin(remoteAddress())) {
@@ -195,6 +196,9 @@ public class InitialHandler extends ChannelInboundHandlerAdapter {
         this.loginUuid = loginRequest.getUuid();
         log.debug("{}: LoginStart protocol={} loginUuid={}, online-mode={}",
                 username, protocolVersion, loginUuid, proxy.getProperties().isOnlineMode());
+        String id = RouteQuery.get(ctx.channel(), "id");
+        //TODO 26.4 Stage2 : Login request
+        log.info("Login request id={}", id);
 
         if (proxy.getProperties().isOnlineMode()) {
             startEncryption();
@@ -216,7 +220,7 @@ public class InitialHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    private void handleEncryptionResponse(EncryptionResponse response) {
+    private void handleEncryptionResponse(EncryptionResponse response,@NonNull ChannelHandlerContext ctx) {
         try {
             byte[] sharedSecret = rsaDecrypt(response.getSharedSecret(), keyPair.getPrivate());
             // 1.19-1.19.2 clients may send a salt+signature instead of the verify token.
@@ -227,7 +231,8 @@ public class InitialHandler extends ChannelInboundHandlerAdapter {
                 }
             }
             log.debug("{}: encryption established (protocol {}), starting auth", username, protocolVersion);
-
+            String QueryId = RouteQuery.get(ctx.channel(), "id");
+            //TODO 26.4 Stage3 : Logging...
             enableEncryption(sharedSecret);
 
             // Compatible auth: the internal Yggdrasil sessionserver is checked first (no HTTP),
@@ -248,7 +253,11 @@ public class InitialHandler extends ChannelInboundHandlerAdapter {
                         log.debug("{}: auth ok ({} ms) uuid={}", username,
                                 System.currentTimeMillis() - authStart, profile.uuid());
                         proxy.getFirewallService().recordLoginSuccess(remoteAddress());
+
+
                         finishLogin(profile.uuid(), profile.properties());
+
+
                     }))
                     .exceptionally(throwable -> {
                         log.error("Authentication failed for {} after {} ms: {}", username,

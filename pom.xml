@@ -63,6 +63,7 @@
         <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
+            <version>26.7.0</version>
             <scope>runtime</scope>
         </dependency>
 
@@ -134,7 +135,7 @@
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcutil-jdk15to18</artifactId>
-            <version>1.84</version>
+            <version>1.85</version>
             <scope>compile</scope>
         </dependency>
 

@@ -5,7 +5,7 @@ NyanProxy（`moe.koseirin.nyanruaineo`）是一个基于 Spring Boot 的一体�
 - **用户系统**：注册、登录、二次验证（2FA）、设备管理、资料修改、头像、密码找回。
 - **Yggdrasil 外置登录**：完整实现 `authserver` / `sessionserver` / `textures`，可作为 Minecraft 外置登录服。
 - **Minecraft 代理（Proxy）**：基于 Netty 实现的 BungeeCord 轻量移植跨服代理，支持多后端路由、子服务器热更新、TabList 拦截、MOTD、封禁、防火墙、权限节点、插件消息（BungeeCord 频道）。
-- **QQ 机器人（Qbot）**：`/status`、`/list`、`/bc`、AI 聊天。
+- **QQ 机器人（Qbot）**：`/status`、`/list`、`/bc`、NyanID 邮箱绑定、长期记忆、小游戏、AI 聊天。
 - **AI 聊天接口**：`/api/v6/romyuai/chat`。
 
 ## 文档目录

@@ -6,6 +6,7 @@ package moe.koseirin.nyanruaineo.utils.EmailHelper;
  */
 
 import jakarta.mail.internet.MimeMessage;
+import lombok.extern.slf4j.Slf4j;
 import moe.koseirin.nyanruaineo.utils.System.EnumList.EmailBody;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
@@ -20,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
+@Slf4j
 @Service
 public class EmailService {
 
@@ -144,6 +146,49 @@ public class EmailService {
 
 
 
+
+    /**
+     * 发送 QQ 与 NyanID 绑定验证码。
+     *
+     * @return 邮件是否成功交给 JavaMailSender；失败时由调用方回滚验证码
+     */
+    public boolean sendQqBindCode(String email, String code) {
+        try {
+            String htmlBody = """
+                    <!DOCTYPE html>
+                    <html lang="zh-CN">
+                    <head><meta charset="utf-8"></head>
+                    <body style="margin:0;padding:24px;background:#f6f7fb;font-family:'Microsoft YaHei',sans-serif;color:#333;">
+                      <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;padding:28px 32px;box-shadow:0 4px 18px rgba(0,0,0,.06);">
+                        <h2 style="margin:0 0 16px;color:#1183cf;">NyanID [猫猫通行证平台]</h2>
+                        <p>你好喵～有人正在把 QQ 与 NyanID 账号绑定。</p>
+                        <p>本次绑定的验证码是：</p>
+                        <p style="font-size:32px;font-weight:700;letter-spacing:8px;color:#ff8c00;margin:18px 0;">%s</p>
+                        <p>验证码 <strong>5 分钟</strong>内有效，且只能使用一次。请回到与机器人的<strong>私聊</strong>中发送：
+                          <code>/bind %s</code>
+                        </p>
+                        <p>如果这不是你本人操作，请忽略这封邮件，并检查你的 NyanID 账号安全。</p>
+                        <hr style="border:none;border-top:1px solid #eee;margin:24px 0;">
+                        <p style="font-size:12px;color:#999;">%s · 联系我们：%s<br>请勿回复此系统邮件</p>
+                      </div>
+                    </body>
+                    </html>
+                    """.formatted(code, code, teamName, contact);
+
+            MimeMessagePreparator preparator = (MimeMessage mimeMessage) -> {
+                MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true, "UTF-8");
+                helper.setTo(email);
+                helper.setSubject("NyanID QQ 绑定验证码[猫猫通行证]");
+                helper.setText(htmlBody, true);
+                helper.setFrom(from);
+            };
+            javaMailSender.send(preparator);
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to send QQ binding code to {}", email, e);
+            return false;
+        }
+    }
 
     public void sendVerificationCode(String user, String code) {
         MimeMessagePreparator messagePreparator = mimeMessage -> {

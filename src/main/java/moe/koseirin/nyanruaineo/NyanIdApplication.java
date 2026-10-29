@@ -12,7 +12,6 @@ import com.github.houbb.sensitive.word.support.deny.WordDenys;
 import com.github.houbb.sensitive.word.support.ignore.SensitiveWordCharIgnores;
 import com.github.houbb.sensitive.word.support.resultcondition.WordResultConditions;
 import com.github.houbb.sensitive.word.support.tag.WordTags;
-import io.github.kloping.spt.annotations.ComponentScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.core.io.ClassPathResource;
@@ -21,7 +20,6 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.data.redis.repository.configuration.EnableRedisRepositories;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
-import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
 import java.nio.file.Path;

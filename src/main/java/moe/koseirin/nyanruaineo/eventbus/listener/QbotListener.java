@@ -5,188 +5,104 @@ package moe.koseirin.nyanruaineo.eventbus.listener;
  * awa
  */
 
-import com.alibaba.fastjson2.JSONObject;
+import com.alibaba.fastjson.JSONObject;
 import io.github.kloping.qqbot.api.v2.FriendMessageEvent;
 import io.github.kloping.qqbot.api.v2.GroupMessageEvent;
-import io.github.kloping.qqbot.entities.ex.Keyboard;
-import io.github.kloping.qqbot.entities.ex.Markdown;
-import io.github.kloping.qqbot.entities.ex.MessageAsyncBuilder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import moe.koseirin.nyanruaineo.entity.NyanIDuser;
 import moe.koseirin.nyanruaineo.eventbus.Interface.EventHeader;
 import moe.koseirin.nyanruaineo.eventbus.SysEvent.QbotFriendMessageReceivedEvent;
 import moe.koseirin.nyanruaineo.eventbus.SysEvent.QbotGroupMessageReceivedEvent;
-import moe.koseirin.nyanruaineo.Minecraft.MinecraftProxy;
-import moe.koseirin.nyanruaineo.Minecraft.service.PlayerQueryService;
-import moe.koseirin.nyanruaineo.Minecraft.service.ServerStatusService;
-import moe.koseirin.nyanruaineo.services.AIServices;
+import moe.koseirin.nyanruaineo.services.QbotCommandService;
+import moe.koseirin.nyanruaineo.utils.Qbot.QbotMessageContext;
+import moe.koseirin.nyanruaineo.utils.Qbot.QbotTextSender;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
-
+/**
+ * 把 QQ 好友/群消息整理成统一上下文后交给 {@link QbotCommandService}。
+ * <p>
+ * 原实现里好友与群聊各有一份 switch，修改命令时容易漏改；现在监听器只负责取字段和发送。
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class QbotListener {
 
-    private final AIServices aiServices;
-    private final MinecraftProxy proxy;
-    private final PlayerQueryService playerQueryService;
-    private final ServerStatusService serverStatusService;
+    private final QbotCommandService commandService;
 
     @EventHeader
-    private void FriendMessageEventListener(QbotFriendMessageReceivedEvent event) {
-        FriendMessageEvent friendMessageEvent = event.event();
-        AtomicReference<JSONObject> data = new AtomicReference<>(JSONObject.parseObject(friendMessageEvent.getMetadata().toJSONString()));
-        String union_openid = data.get().getJSONObject("author").getString("union_openid");
-        String msg = data.get().getString("content");
-        String[] parts = msg.trim().split(" ", 2);   // 按第一个空格拆分
-        String command = parts[0];                   // 命令，如 /bc
-        String args = parts.length > 1 ? parts[1] : ""; // 参数，如 message
-        switch (command) {
-            case "/help" -> {
-                MessageAsyncBuilder builder = new MessageAsyncBuilder();
-                Markdown markdown = Markdown.ofText("### 测试markdown大标题");
-                builder.append(markdown);
-
-                Keyboard.KeyboardBuilder keyboardBuilder = new Keyboard.KeyboardBuilder();
-                Keyboard keyboard =
-                        keyboardBuilder
-                                .addRow()
-                                .addButton()
-                                .setLabel("测试标题")
-                                .setVisitedLabel("测试标题.")
-                                .setStyle(1)
-                                .setActionData("123")
-                                .setActionEnter(false)
-                                .setActionReply(true)
-                                .setActionType(2)
-                                .build()
-                                .build()
-                                .build();
-                builder.append(keyboard);
-                friendMessageEvent.send(builder.build());
+    private void friendMessageListener(QbotFriendMessageReceivedEvent received) {
+        FriendMessageEvent event = received.event();
+        try {
+            JSONObject metadata = event.getMetadata();
+            JSONObject author = metadata == null ? null : metadata.getJSONObject("author");
+            String unionOpenid = author == null ? null : author.getString("union_openid");
+            if (unionOpenid == null || unionOpenid.isBlank()) {
+                log.error("Qbot friend message has no union_openid. metadata={}",
+                        metadata == null ? "null" : metadata.toJSONString());
+                safeSend(event, "呜……咱暂时认不出你是谁喵，稍后再试一次吧。");
+                return;
             }
-            case "/status" -> {
-                serverStatusService.getStatusesAsync().thenAccept(statuses -> {
-                    if (statuses.isEmpty()) {
-                        friendMessageEvent.send("No sub-servers configured!");
-                        return;
-                    }
-                    StringBuilder reply = new StringBuilder("Server status:");
-                    for (ServerStatusService.ServerStatus status : statuses) {
-                        reply.append("\n- ").append(status.name())
-                                .append(" (").append(status.host()).append(':').append(status.port()).append(") ")
-                                .append(status.online() ? "online" : "offline")
-                                .append(" players: ").append(status.playerCount());
-                    }
-                    friendMessageEvent.send(reply.toString());
-                });
-
-            }
-            case "/list" ->{
-                List<PlayerQueryService.PlayerInfo> players = playerQueryService.getOnlinePlayers();
-                if (players.isEmpty()) {
-                    friendMessageEvent.send("No players online.");
-                    return;
-                }
-                StringBuilder reply = new StringBuilder("Online players (" + players.size() + "):");
-                for (PlayerQueryService.PlayerInfo player : players) {
-                    reply.append("\n- ").append(player.username())
-                            .append(" [").append(player.serverName() == null ? "?" : player.serverName()).append(']');
-                }
-                friendMessageEvent.send(reply.toString());
-            }
-            case "/nyanid" -> friendMessageEvent.send("awa");
-            case "/bc" -> friendMessageEvent.send("Broadcast delivered to " + proxy.broadcast("§b§l[全服广播] §r" + args) + " player(s).");
-            case "d" -> friendMessageEvent.send("1");
-            default -> friendMessageEvent.send(aiServices.chat(union_openid, msg, "null"));
+            String content = metadata.getString("content");
+            String messageId = metadata.getString("id");
+            String displayName = commandService.resolveDisplayName(unionOpenid);
+            QbotMessageContext context = new QbotMessageContext(
+                    unionOpenid,
+                    displayName,
+                    content,
+                    false,
+                    null,
+                    messageId,
+                    text -> QbotTextSender.send(event, text)
+            );
+            commandService.handle(context);
+        } catch (Exception e) {
+            log.error("Failed to handle Qbot friend message", e);
+            safeSend(event, "呜……咱刚刚处理消息时卡住了喵，再试一次好不好？");
         }
     }
 
-
-
-
-
     @EventHeader
-    private void GroupMessageEventListener(QbotGroupMessageReceivedEvent event) {
-        GroupMessageEvent groupMessageEvent = event.event();
-        AtomicReference<JSONObject> data = new AtomicReference<>(JSONObject.parseObject(groupMessageEvent.getMetadata().toJSONString()));
-        String union_openid = data.get().getJSONObject("author").getString("union_openid");
-        String msg = data.get().getString("content");
-        String[] parts = msg.trim().split(" ", 2);   // 按第一个空格拆分
-        String command = parts[0];                   // 命令，如 /bc
-        String args = parts.length > 1 ? parts[1] : ""; // 参数，如 message
-        switch (command) {
-            case "/help" -> {
-                MessageAsyncBuilder builder = new MessageAsyncBuilder();
-                Markdown markdown = Markdown.ofText("### 测试markdown大标题");
-                builder.append(markdown);
-
-                Keyboard.KeyboardBuilder keyboardBuilder = new Keyboard.KeyboardBuilder();
-                Keyboard keyboard =
-                        keyboardBuilder
-                                .addRow()
-                                .addButton()
-                                .setLabel("测试标题")
-                                .setVisitedLabel("测试标题.")
-                                .setStyle(1)
-                                .setActionData("123")
-                                .setActionEnter(false)
-                                .setActionReply(true)
-                                .setActionType(2)
-                                .build()
-                                .build()
-                                .build();
-                builder.append(keyboard);
-                groupMessageEvent.send(builder.build());
+    private void groupMessageListener(QbotGroupMessageReceivedEvent received) {
+        GroupMessageEvent event = received.event();
+        try {
+            JSONObject metadata = event.getMetadata();
+            JSONObject author = metadata == null ? null : metadata.getJSONObject("author");
+            String unionOpenid = author == null ? null : author.getString("union_openid");
+            if (unionOpenid == null || unionOpenid.isBlank()) {
+                log.error("Qbot group message has no union_openid. metadata={}",
+                        metadata == null ? "null" : metadata.toJSONString());
+                safeSend(event, "呜……咱暂时认不出你是谁喵，稍后再试一次吧。");
+                return;
             }
-            case "/status" -> {
-                serverStatusService.getStatusesAsync().thenAccept(statuses -> {
-                    if (statuses.isEmpty()) {
-                        groupMessageEvent.send("No sub-servers configured!");
-                        return;
-                    }
-                    StringBuilder reply = new StringBuilder("Server status:");
-                    for (ServerStatusService.ServerStatus status : statuses) {
-                        reply.append("\n- ").append(status.name())
-                                .append(" (").append(status.host()).append(':').append(status.port()).append(") ")
-                                .append(status.online() ? "online" : "offline")
-                                .append(" players: ").append(status.playerCount());
-                    }
-                    groupMessageEvent.send(reply.toString());
-                });
-
+            String content = metadata.getString("content");
+            String messageId = metadata.getString("id");
+            String groupOpenid = metadata.getString("group_openid");
+            if ((groupOpenid == null || groupOpenid.isBlank()) && event.getGroup() != null) {
+                groupOpenid = event.getGroup().getOpenid();
             }
-            case "/list" ->{
-                List<PlayerQueryService.PlayerInfo> players = playerQueryService.getOnlinePlayers();
-                if (players.isEmpty()) {
-                    groupMessageEvent.send("No players online.");
-                    return;
-                }
-                StringBuilder reply = new StringBuilder("Online players (" + players.size() + "):");
-                for (PlayerQueryService.PlayerInfo player : players) {
-                    reply.append("\n- ").append(player.username())
-                            .append(" [").append(player.serverName() == null ? "?" : player.serverName()).append(']');
-                }
-                groupMessageEvent.send(reply.toString());
-            }
-            case "/nyanid" -> groupMessageEvent.send("awa");
-            case "/bc" -> groupMessageEvent.send("Broadcast delivered to " + proxy.broadcast("§b§l[全服广播] §r" + args) + " player(s).");
-            case "d" -> groupMessageEvent.send("1");
-            default -> groupMessageEvent.send(aiServices.chat(union_openid, msg, "null"));
+            String displayName = commandService.resolveDisplayName(unionOpenid);
+            QbotMessageContext context = new QbotMessageContext(
+                    unionOpenid,
+                    displayName,
+                    content,
+                    true,
+                    groupOpenid,
+                    messageId,
+                    text -> QbotTextSender.send(event, text)
+            );
+            commandService.handle(context);
+        } catch (Exception e) {
+            log.error("Failed to handle Qbot group message", e);
+            safeSend(event, "呜……咱刚刚处理消息时卡住了喵，再试一次好不好？");
         }
-
-
     }
 
-
-
-    private NyanIDuser getUser(String union_openid) {
-
-
-        return null;
+    private void safeSend(io.github.kloping.qqbot.api.Sender sender, String text) {
+        try {
+            QbotTextSender.send(sender, text);
+        } catch (Exception e) {
+            log.warn("Failed to send Qbot error reply", e);
+        }
     }
 }
